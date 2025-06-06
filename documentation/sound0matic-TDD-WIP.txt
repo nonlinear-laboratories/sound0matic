@@ -1,0 +1,1008 @@
+# *INTRODUCTION & SCOPE*
+
+## Introduction
+
+The *Sound-0-Matic mk1* is a monophonic, performance-oriented spectral sampler synthesizer developed by nonlinear laboratories.  In the Sound-0-Matic, incoming audio is analyzed via a Short-Time Fourier Transform (STFT) and split into sinusoidal (tonal), transient (attack), and noise components.
+
+Phase-vocoder methods and spectral modeling provide the theoretical foundation: for instance, FFT-based vocoders enabled speech coding and musical time/pitch modification as early as the 1970s.  The Sound-0-Matic builds on these insights but targets live performance: low latency processing is critical.  The core analysis and resynthesis engine is implemented in highly optimized C++ (using FFT libraries like FFTW or Ooura) within the JUCE framework.  The plugin optionally embeds Faust-generated DSP code for some filters or effects modules.  The user interface is styled with a retro analog aesthetic (knobs, switches, VU meters) while providing modern conveniences like MIDI-learnable parameters and real-time waveform/spectrum displays.
+
+In summary, the Sound-0-Matic offers a research-grade spectral sampler that can freeze sounds, blur and smear spectra, apply creative phase-domain transformations, and otherwise reshape sound in musically useful ways.  Its intended users are DSP-savvy audio programmers, plugin developers, and experimental sound designers who appreciate detailed control over spectral content.
+
+## Open Source Philosophy and Licensing
+
+The Sound-0-Matic is committed to remaining 100% open source throughout its lifecycle. All code, documentation, and associated materials will be released under GPLv3 or compatible licenses.
+
+### License Strategy
+- **Core Plugin**: GPLv3 (ensures derivative works remain open)
+- **Dependencies**: Only GPL-compatible libraries (JUCE Personal/GPL, FFTW3, KissFFT)
+- **Documentation**: Creative Commons BY-SA 4.0
+- **Build System**: MIT-licensed CMake scripts where possible
+- **NO PROPRIETARY DEPENDENCIES**: Reject any closed-source libraries, even if performance benefits exist
+
+## Project Scope
+
+This document details the technical design of the Sound-O-Matic plugin, broken into logical components.  The project scope includes:
+
+* **Spectral Analysis Engine:** Implement a low-latency STFT pipeline (windowing + FFT) with adjustable frame size, hop size, and overlap-add processing.  Use COLA-compliant windows (e.g. Hamming) for perfect reconstruction.  Provide options for zero-padding to allow fine-grained spectral manipulation.
+* **STN Decomposition:** Develop a “sines+transients+noise” model via **Morphological Spectral Analysis:** Implement spectrogram-based morphological filtering using mathematical morphology operations (opening, closing, top-hat transforms). This approach analyzes the 2D time-frequency representation to separate:
+- **Harmonic Structures**: Detected via morphological opening with vertical structural elements
+- **Transient Events**: Extracted using top-hat transforms to highlight brief spectral peaks  
+- **Noise Components**: Modeled through morphological closing operations
+(This method provides more robust separation of spectral components compared to traditional sinusoidal modeling, especially for complex polyphonic material.)
+* **Real-Time Spectral Effects:** Provide controls for effects such as *Freeze* (hold or loop the current spectrum), *Blur* (smooth or diffuse spectral peaks), *Smear* (time-domain convolution carried out in the spectral domain), and *Phase Swap* (manipulate phase of spectral bins for chorusing or stereo effects).  Implement pitch shifting and time-stretching via a phase-vocoder (phase unwrapping and increment scaling) for creative pitch/font adjustments.  Ensure each effect is computed on-the-fly with minimal latency.
+* **Stereo and Spatial Processing:** Support stereo input.  Include special stereo phase-processing features (e.g. inter-channel phase shifting, mid/side spectral effects) to create stereo textures.  Ensure phase relationships can be independently adjusted per channel for spatial modulation.
+* **User Interface & MIDI:** Design a retro-analog GUI (knobs, sliders, toggle switches, vintage fonts) grouped by function (analysis, effects, envelopes, mixing).  Include visual feedback: waveform and/or spectrum display, dB meter, peak indicator.  All major parameters (e.g. effect mix levels, window size, pitch ratio) will support MIDI CC learn and host automation.
+* **Performance Goals:** The audio callback must run in real time with typical buffer sizes (64–256 samples) and incur very low latency (on the order of 5–10ms or less).  CPU utilization should allow multiple instances on a modern CPU.  This requires highly optimized FFT code, efficient memory handling (no dynamic allocation or locks in the audio thread), and parameter smoothing (to avoid zipper noise) using cheap one-pole filters or JUCE’s dsp::SmoothedValue.
+* **Modular Architecture:** Structure the code so DSP modules (FFT, peak tracker, filters, etc.) are encapsulated.  Use Faust to prototype individual DSP blocks; Faust’s C++ output (via `faust2api`) provides callable DSP classes.  The JUCE plugin audio processor will integrate these blocks into a coherent signal flow.
+* **Quality Assurance:** Develop a comprehensive test plan.  Unit test DSP components (FFT invertibility, filter responses, partial trackers) with known signals (sinusoids, impulses, noise).  Profile performance under different CPU loads.  Plan for listening tests to validate sonic quality.  Use version control and continuous integration to ensure reliability.
+* **Deployment:** Target Linux (VST3/AU) with buildable CMake/Ninja project.  Use modern C++ (C++17 or later) and JUCE 6+.  Keep dependencies minimal (JUCE, FFT library, optionally Faust runtime).
+
+Each of these goals will be expanded in the following sections: architecture overview (JUCE+Faust interactions), detailed DSP theory and implementation, requirements/priorities, implementation specifics, UI design, testing strategy, and future enhancements.
+
+
+
+# *SYSTEM ARCHITECTURE OVERVIEW*
+
+## JUCE, Faust, and C++ Integration
+
+The Sound-0-Matic is built as a standard JUCE audio plugin (e.g. VST3) in C++.  The JUCE **AudioProcessor** class implements the real-time audio callback.  Faust (if used) provides DSP blocks: Faust “.dsp” source files are compiled into C++ using `faust2api`. For example, running:
+
+```
+faust myEffects.dsp -o myEffects.cpp
+```
+
+produces a C++ class implementing an audio callback.  More conveniently, `faust2api -juce myEffects.dsp` generates a JUCE-compatible DSP engine (e.g. `DspFaust.cpp`/`.h`) that can be dropped into the JUCE project.  In either case, the Faust code defines DSP computations (filters, envelopes, simple effects), while the JUCE processor instantiates these objects and calls their process functions on each audio block.  The AudioProcessorEditor handles the GUI; parameter changes (from knobs or automation) are sent to the DSP via JUCE’s parameter system or direct setter calls (Faust exposes parameter paths).
+
+Internally, the JUCE processor will hold member instances for each DSP component: FFT buffers, window function, a “sine bank” object for partial synthesis, and any Faust DSP classes.  The audio callback (`processBlock`) reads from an input circular buffer, processes through the STFT pipeline, and writes to the output buffer.  Custom C++ classes handle STN separation, transient detection, and effect algorithms.  Faust-generated classes are used for embarrassingly parallel or sample-based tasks (e.g. a one-pole filter, LFO, simple waveshaper) which Faust can express concisely.
+
+## Threading Model, Memory, and Real-Time Safety
+
+JUCE distinguishes the real-time audio thread (processing audio) from the GUI thread.  The AudioProcessor’s `processBlock()` runs in the audio thread and must be non-blocking.  All heavy DSP (windowing, FFT, ISTFT, STN analysis, etc.) occurs here.  No heap allocations, locks, or I/O are allowed on this thread.  Memory (arrays for window coefficients, FFT workspace, circular ring buffers) is pre-allocated in initialization, avoiding any `new` or `malloc` during processing.  For example, use `std::vector<float>` or raw arrays sized to fixed maximum block size (e.g. 4096 samples) for audio buffers.  The FFT plan (if using FFTW, etc.) can be created ahead of time (FFT “wisdom” loaded) to avoid on-the-fly planning overhead.
+
+Parameter updates (knob moves, automation) are usually delivered via JUCE’s `AudioProcessorValueTreeState` or similar.  These updates may arrive asynchronously in the GUI thread or via the host’s automation callback.  To propagate them safely, we either use atomic variables/lock-free FIFOs or simply read the current parameter values at the start of each audio block (JUCE handles synchronization).  Parameter smoothing (e.g. to avoid clicks when changing parameters) is done with simple one-pole filters or JUCE’s `SmoothedValue`, which are real-time safe and do not block.
+
+Special care is taken in the overlap-add mechanism: an output double-buffer of length *N + R* samples holds the IFFT results.  Each processed frame is written into this buffer at the frame’s time offset.  After writing, the first *R* samples are added into the audio output.  Index arithmetic is carefully handled to avoid costly modulus operations (using circular buffer pointers).  No semaphores or waiting is ever used in the audio path.
+
+Faust DSP objects are thread-safe by design (they only do float operations).  We call a Faust `instance->compute(numSamples, inputs, outputs)` each block.  If multiple Faust instances are used, they can be updated from the audio thread as well.  The Faust parameters are updated via `setParamValue(path, value)`, which typically acquires an internal lock; however, updating parameters outside the audio thread or batching updates per block avoids audio glitches.
+
+## Signal Flow (ASCII Diagram)
+
+The following diagram outlines the audio path through the Sound-0-Matic.  Note that all processing in the branches happens in real time on the audio thread; the GUI only reads from pre-filled display buffers.
+
+```
+***NEEDS AMMENDING***
+             +--> [Sinusoidal Extraction]
+             |      (peak tracker + sine synthesis)
+Audio In -- [FFT Analysis Window] -->|        
+             |      (FFT on windowed frame)     [IFFT & Overlap-Add] --> Audio Out
+             |                                     (summing branches)
+             +--> [Transient Detection & Short-time Sync]
+                    (trigger separate path if needed)
+             |
+             +--> [Noise Filter Bank]
+                    (filter shaped noise generator)
+***NEEDS AMMENDING***
+```
+
+* The **FFT Analysis Window** block slides a window (size *M*, hop *R*) over the input, zero-pads to *N*, and computes an *N*-point FFT.
+* The spectrum `X_m[k]` is then split into components: sinusoidal peaks (fed into the Sinusoidal Extraction branch), the transient indicator path (to decide if a transient override is needed), and residual noise (fed into the Noise Filter bank).
+* Each branch can apply its own processing (e.g. pitch-shifting to sines, bypass or shorter-windo﻿w to transients, filtering to noise).
+* The outputs of all branches are combined spectrally into `Y_m[k]`, then an inverse FFT and overlap-add reconstruct the time-domain output.
+
+This modular flow ensures clarity: for example, turning off the freeze effect is simply “pass-through” in the spectral domain.  The asynchronous GUI thread visualizes the **Audio In** waveform and the **Audio Out** waveform (or spectrogram) by reading from a thread-safe FIFO that mirrors the audio buffer.
+
+# *DETAILED DSP THEORY*
+
+## FFT, STFT, and IFFT (with COLA, overlap-add, zero-padding)
+
+The core spectral processing is built on the Short-Time Fourier Transform (STFT) and inverse STFT.  In practice, the audio stream is split into overlapping frames of length *M* samples.  Each frame is multiplied by a window function *w\[n]* of length *M*.  We choose a window with the **Constant OverLap-Add (COLA)** property; such as Hamming window with 50% overlap - The Hamming window (α=0.54, β=0.46) provides excellent COLA properties with 50% overlap and superior side-lobe suppression compared to rectangular windows.
+
+In implementation:
+
+* **Windowing:** For frame index *m*, form a zero-phase (symmetric) windowed buffer `x_m[n] = x[n + mR] * w[n]`, `n=0..M-1`.
+* **Zero-padding:** Extend `x_m[n]` with zeros to length *N* (`N >= M`, typically a power of 2).  Zero-padding factor `N/M` interpolates the frequency resolution (each FFT bin is split into `N/M` bins).
+* **FFT:** Compute the *N*-point FFT: `X_m[k] = sum_{n=0..N-1} x_m[n] * exp(-j 2π k n / N)`.  (When the nonzero data is centered in the buffer, this implements a time-normalized STFT centered at `mR`.)
+* **Processing (optional):** Apply any desired modifications to the spectrum `X_m[k]` (filtering, scaling, phase shifts, etc).
+* **IFFT:** Compute the inverse FFT to get a real buffer of length *N*.  Because the input was real, one typically only needs to store *N/2+1* bins and use a real IFFT.
+* **Overlap-Add:** Write the first *M* samples of the IFFT output back into an output buffer at offset `mR`.  Continue for each frame; overlapping samples are summed.  By the COLA property, the sum of the windowed outputs reconstructs the original signal when no modifications are applied.
+
+The above is the **overlap-add** (OLA) method of STFT synthesis.  An alternative is **overlap-save** (OLS), which performs circular convolution and discards wrap-around; either approach yields identical results under appropriate conditions.
+
+**Important:** The output buffer must handle wraparound.  In practice we use a ring (circular) buffer of length *N+R*.  After writing each IFFT frame at offset `mR`, we add (overlap) it into the buffer.  Then we copy out the first *R* samples as the output and advance the read pointer by *R*.  This is an efficient rolling IFFT.  No re-windowing is needed on overlap-add since the inverse FFT inherently undoes the windowing (given a COLA window).
+
+Pseudocode for the core STFT loop:
+
+```
+for each frame m:
+  // Analysis
+  frame = inputBuffer.read(m*R, M)         // length M
+  for n in 0..M-1:
+      windowed[n] = frame[n] * w[n]
+  padded = zeroPad(windowed, N)           // length N
+  X = FFT(padded)                         // complex spectrum length N
+
+  // (perform STN analysis, effects, etc on X)
+
+  // Synthesis
+  Y = IFFT(X)                             // real output length N
+  outputBuffer.addSamples(m*R, Y[0..N-1])
+```
+
+If `X` is unmodified, `addSamples` with a COLA window will yield exact reconstruction.  For large *N*, this incurs latency of `(N/2)/Fs` seconds (half the IFFT window, assuming zero-phase), but provides finer frequency resolution.  Choice of *M*, *R*, and *N* is a trade-off (longer windows give better freq. precision but more latency and smearing in time).
+
+## STN Decomposition via Morphological Filtering for Spectrogram Shape Analysis
+
+The plugin implements a sinusoidal–transient–noise (STN) model on top of the STFT.
+
+* **Sinusoids:** 
+* **Transient:**
+* **Residual:**
+
+### STN Extraction Workflow
+
+...
+
+## Phase Vocoder Mechanics (Phase Delta, Unwrapping, Pitch/Time Mapping)
+
+Classic phase-vocoder time-stretching and pitch-shifting are used to manipulate playback timing and pitch.  Using the tracked sinusoids (with amplitude A and phase Φ), the instantaneous frequency ω can be computed.  Concretely, between frame *m-1* and *m*, the true phase advance is:
+
+```
+ΔΦ = PrincipalArg(Φ_m - Φ_{m-1} - 2π*k*R/N)
+ω_inst = (2π*k/N + ΔΦ/R)           (radians per sample)
+```
+
+Here `PrincipalArg()` unwraps the phase into the range \[-π,π].  We then synthesize new phases for an output hop *R'*.  For a time-stretch factor *α* = \*R'/*R*, we do:
+
+```
+Φ'_m = Φ'_{m-1} + ω_inst * R'
+Y_m[k] = A_m * exp(j Φ'_m)
+```
+
+Thus if *R'>R* (stretch), phase increments slower, yielding a longer sound.  If *R'\<R*, the sound is compressed.  For pitch shift without time-stretch, one can set *R'=R* but remap frequencies by resampling the spectral envelope (shifting magnitudes to new bins and computing corresponding phases).  In all cases, proper handling of phase wrapping is essential to avoid “phasiness”.
+
+**Pseudocode (for each bin k):**
+
+```
+phi = angle(X_m[k])
+prev = prevPhase[k]
+delta = phi - prev - (2π*k*R/N)
+delta = wrapToPi(delta)                 # principal value
+omega = (2π*k/N + delta/R)
+storedPhase[k] = phi
+
+phi_synth[k] += omega * R_synth
+Y_m[k] = mag(X_m[k]) * exp(j * phi_synth[k])
+```
+
+The plugin performs this for each spectral bin (or at least for each sinusoidal peak).  Using an FFT vocoder (with unwrapped phase) allows smooth interpolation and exact reconstruction.
+
+## Spectral/Phase Manipulation Effects
+
+With the STFT calculated, various effects are applied per-frame:
+
+* **Spectral Freeze:** Repeatedly re-use a single STFT frame.  Practically, when freeze is engaged we stop advancing `m` and continuously IFFT the same `X_m`.  This yields a frozen harmonic chord or drone from the last analyzed frame.
+* **Spectral Blur:** Smooth the magnitude spectrum.  For example, convolve |X\[k]| with a small Gaussian kernel in `k`, or average neighboring bins.  This diffuses spectral peaks, softening the timbre.  Alternatively, add random phase noise to each bin (while preserving magnitudes) to achieve a blurring of phase coherence.
+* **Spectral Smear:** Spread energy over time.  One method is to mix each new spectrum with previous ones: maintain a short history buffer of past |X| and blend them.  This is equivalent to a time-domain convolution that is executed in the spectral domain.  The result is a reverb-like “fading tail” effect on spectral features.
+* **Phase Distortions:** Modify phases across the spectrum to create time shifts or stutters.  For instance, apply a linear phase ramp (ϕ → ϕ + c·k) to impose a time delay.  Or apply a nonlinear phase function to distort waveform shape (all-pass filtering in frequency domain).
+* **Frequency Shifting / Inversion:** Shift the entire spectrum up/down in frequency by re-indexing magnitudes.  For example, spectral inversion (flipping bins `k -> N-k`) creates a unique effect.  After any rearrangement, compute phases accordingly (often by simply copying or negating original phases).
+* **Spectral Filters:** Time-varying filters are applied by multiplying `X_m[k]` by a response `H[k,m]`.  For example, one can implement a formant shift by emphasizing certain bands.  This can be done efficiently by directly modifying FFT bins (since `H` is diagonal in the spectral basis).
+* **Stereo Texture Algorithms:** For stereo inputs, separate STFTs for left and right are computed.  We can then manipulate their relative phases to create spatial effects.  For instance, exchange or invert the sign of some bins between channels, or apply a decorrelation matrix.  A common trick is mid/side processing: let `M[k]=L[k]+R[k]`, `S[k]=L[k]-R[k]`.  Apply a phase effect to `S[k]` (like a slow oscillation), then recombine.  Human ears interpret inter-channel phase shifts as movement in the stereo field.
+
+In all cases, after applying the desired spectral effect, the modified frames are fed to the inverse STFT (IFFT + overlap-add) as usual.  Because the STFT is invertible (with the COLA window) and we preserve consistency, artifacts are minimized.
+
+## Transient Detection Methods
+
+...
+
+## Stereo Phase-Domain Texture Algorithms
+
+Building on the above, stereo processing allows additional phase-based textures.  Typical strategies:
+
+* **Inter-Channel Phase Shifts:** Apply different phase offsets to corresponding bins in left vs. right.  For example, add +θ to all left-channel phases and –θ to right for a moving effect.
+* **Mid/Side Modulation:** Compute mid = (L+R)/√2 and side = (L–R)/√2 in the complex spectral domain.  Apply distinct spectral effects (e.g. delay one octave in frequency) to side vs. mid, then invert transform.
+* **Random Phase Variation:** Independently randomize or modulate phase for left and right from frame to frame to decorrelate channels.
+* **All-Pass Crossfeed:** Mix some frequencies from L into R with a phase offset (and vice versa) to create comb-like spatial filters.
+
+These exploit the fact that the human ear localizes sound by phase (and level) differences.  By controlling phase decorrelation, the plugin can create wide stereo “textures”.  All operations ultimately result in two inverse STFTs (one per channel).
+
+## Faust Implementation Notes (Optional)
+
+While most algorithms are in C++, Faust (a functional DSP language) can implement specific modules easily.  Faust code is sample-oriented and can describe, for example, a single-pole smoother or a band-pass filter concisely.  The Faust compiler generates a C++ DSP class (via `faust2api`) that runs in the audio thread without dynamic allocation.  In practice, we use Faust to code small DSP blocks and test them quickly.  However, managing multi-frame state (like STFT buffers, circular queues, spectral peak lists) is cumbersome in Faust.  Therefore, the overall STFT loop and STN logic remain in C++.  Faust functions are integrated by instantiating the generated classes in the JUCE processor and calling their `compute()` method with each block.  This hybrid approach leverages Faust for efficiency in math operations, while keeping complex control flow in C++.
+
+
+
+# *REQUIREMENTS AND DESIGN*
+
+## Requirements Prioritization (MoSCoW)
+
+We apply the MoSCoW prioritization technique (Must/Should/Could/Won’t) to define feature priorities:
+
+* **Must Have:**
+
+  * Real-time STFT engine (FFT+OLA) with selectable window/hop (critical for all processing).
+  * Basic STN analysis (sinusoid tracking + noise modeling).
+  * Core effects: Freeze, at least one form of blur/smear, and basic pitch-shift via phase vocoder.
+  * Stable low-latency performance (e.g. <10ms end-to-end).
+  * Functional UI with essential controls (window size, effect mix knobs, freeze toggle) and MIDI mapping for them.
+  * Cross-platform build (CMake/Ninja, targeting Linux) with no fatal bugs in audio processing.
+
+* **Should Have:**
+
+  * Transient detection and a transient-specific mode.
+  * Additional spectral effects (e.g. spectral inversion, gating, adjustable blur kernel).
+  * Stereo-specific features (phase-based stereo texturing).
+  * Parameter smoothing to prevent zipper noise.
+  * Presets system and full host automation support.
+
+* **Could Have:**
+
+  * Extended spectral filtering options (formant shifting, de-resonance filter).
+  * Visualization enhancements (multi-channel spectrogram, parametric graph).
+  * Alternative formats (an LV2 version, or standalone JACK app).
+  * Modular modulation (a simple modulation matrix to route LFOs/ADSRs to parameters).
+
+* **Won’t Have (for initial release):**
+
+  * Polyphonic voice scheduling (plugin is monophonic).
+  * Time-stretch beyond certain limits (e.g. extreme 100× stretching may be beyond scope).
+  * Machine-learning components or non-FFT analysis (e.g. no deep-learning pitch detection).
+  * Legacy support (no 32-bit build).
+
+These categories ensure that the MVP delivers the essential spectral sampling features with rock-solid performance, while deferring less-critical extras to later versions.
+
+## Performance Goals
+
+The plugin must run in real time under Linux.  Typical performance targets:
+
+* **Latency:** Ideally <10ms total. For a 44.1kHz project, using 2048-sample windows with 50% overlap yields \~23ms frame latency (half window). We aim for <1024 samples (\~11.6ms) or lower if needed. Overlap-add and zero-padding add negligible algorithmic delay beyond the frame.
+* **CPU Usage:** On a modern CPU (e.g. 4th-gen Intel or AMD), one instance should use < 5-10% CPU for moderate settings (1024-2048 FFT). Highly optimized FFT (using SIMD or efficient libraries) is crucial. Avoiding reallocation and branch mispredictions helps. Performance profiling (see below) will guide optimizations.
+* **Throughput:** Must process at least 44100 samples per second for one input block < block length. If block size is 256 samples (5.8ms), processing should complete well within that time slice. This implies FFT and IFFT (plus effects) in <2ms typically, leaving room for other overhead.
+* **Memory:** Low memory overhead. A few MB of RAM for buffers is acceptable, but no large data structures or memory leaks.
+
+Monitoring tools (taskset, `top`, Valgrind’s callgrind) will be used to ensure these goals. For testing, extreme cases (all effects on, high FFT size) will be tried to verify the plugin still meets deadlines.
+
+### New Dependencies:
+
+```cmake
+# Add CImg library (header-only)
+find_path(CIMG_INCLUDE_DIR CImg.h PATHS /usr/include /usr/local/include)
+target_include_directories(sound0matic PRIVATE ${CIMG_INCLUDE_DIR})
+
+# CImg optional dependencies for advanced features
+find_package(JPEG QUIET)
+find_package(PNG QUIET)
+if(JPEG_FOUND AND PNG_FOUND)
+    target_link_libraries(sound0matic PRIVATE ${JPEG_LIBRARIES} ${PNG_LIBRARIES})
+    target_compile_definitions(sound0matic PRIVATE cimg_use_jpeg cimg_use_png)
+endif()
+```
+
+## Testing and Validation Plans
+
+We will validate both correctness and performance:
+
+* **Unit Tests:** Use a C++ unit test framework (e.g. Catch2 or Google Test) to test core DSP functions. Examples:
+
+  * **FFT/IFFT Roundtrip:** Input a random or delta array, apply window+FFT+IFFT+OLA, verify output equals input (within numerical tolerance).
+  * **Sinusoidal Reconstruction:** Synthesize a known multi-sine signal, run STN analysis+resynthesis, and compare to original.
+  * **Filter/EQ:** If implementing any spectral filtering, test magnitude responses against analytical expectation.
+  * **Transient Detector:** Feed in synthetic signals with known transients to ensure detection logic triggers correctly.
+* **Automated Checks:** Faust’s online `verify` mode or custom scripts can compare FFT outputs for small cases. Spectral difference metrics (e.g. L2 norm of the difference between original and reconstructed waveforms) should be extremely low for simple passthrough.
+* **Performance Profiling:** Measure average and worst-case CPU usage in the audio callback (using markers). Use tools like Linux `perf`, Valgrind, or external audio metering (e.g. JUCE’s `TimeSliceThread` debugging) to ensure headroom. Optimize any code hotspots.
+* **Real-Time Stability:** Test under high CPU load to ensure no drop-outs (e.g. by disabling GUI and stressing CPU). Verify that no locks or exceptions leak into the audio thread.
+* **Subjective QA:** Arrange listening tests with professional audio peers. Confirm that effects are artifact-free (no zippering, metallic ringing, etc.) and compare to reference spectral tools (e.g. TimeStretch in other DAWs) for quality.
+* **Platform Testing:** Ensure operation on multiple Linux distributions, with popular DAW hosts. Also test VST compatibility (if applicable) on MacOS as needed.
+
+
+
+# *IMPLEMENTATION DETAILS*
+
+## Data Structures
+
+* **Audio Buffers:** Use single-precision floats (`float`) for audio. Maintain circular buffers (`std::vector<float>`) for input and output streaming. The STFT uses two main buffers of length *N*: one for the current window (analysis), one for overlap-add accumulation (output). These can be plain arrays or `std::array` if size fixed, or a JUCE `AudioBuffer<float>` for convenience.
+
+* **FFT Workspace:** Allocate static arrays for the FFT input and output (size *N* complex). Consider using FFTW which allows in-place transforms. Pre-compute FFT plans in initialization.
+
+* **Window Coefficients:** Compute the window *w\[n]* once (length *M*) and store in an array.
+
+* **STN or Morphological Filtering for Spectrogram Shape Analysis**:
+
+```cpp
+#include "CImg.h"
+using namespace cimg_library;
+
+class MorphologicalSpectralProcessor {
+private:
+    CImg<float> spectrogram_buffer;
+    CImg<float> structural_element;
+    int frame_history_size;
+    int current_frame_idx;
+    
+public:
+    struct MorphologicalComponents {
+        CImg<float> harmonic_structures;    // Opening result
+        CImg<float> transient_peaks;       // Top-hat transform
+        CImg<float> noise_residual;        // Closing - original
+    };
+    
+    MorphologicalSpectralProcessor(int fft_size, int history_frames = 64) 
+        : frame_history_size(history_frames), current_frame_idx(0) {
+        
+        // Initialize spectrogram buffer: [frequency bins × time frames]
+        spectrogram_buffer.assign(fft_size/2 + 1, history_frames);
+        spectrogram_buffer.fill(0);
+        
+        // Create structural elements for different morphological operations
+        createStructuralElements(fft_size);
+    }
+    
+    void createStructuralElements(int fft_size) {
+        // Harmonic structure element: vertical line (frequency coherence)
+        CImg<float> harmonic_se(1, 7);  // 7-bin vertical element
+        harmonic_se.fill(1);
+        
+        // Transient structure element: horizontal line (time coherence) 
+        CImg<float> transient_se(5, 1); // 5-frame horizontal element
+        transient_se.fill(1);
+        
+        structural_element = harmonic_se; // Default to harmonic detection
+    }
+    
+    MorphologicalComponents processFrame(const float* magnitude_spectrum, int fft_size) {
+        // Add new frame to spectrogram buffer
+        updateSpectrogramBuffer(magnitude_spectrum, fft_size);
+        
+        MorphologicalComponents components;
+        
+        // 1. HARMONIC EXTRACTION via Morphological Opening
+        // Opening = Erosion followed by Dilation
+        // Removes small/isolated peaks, preserves harmonic structures
+        components.harmonic_structures = performOpening(spectrogram_buffer, getHarmonicStructuralElement());
+        
+        // 2. TRANSIENT DETECTION via Top-Hat Transform  
+        // Top-hat = Original - Opening
+        // Highlights peaks that were removed by opening (transients)
+        components.transient_peaks = spectrogram_buffer - components.harmonic_structures;
+        components.transient_peaks.threshold(0.1f); // Remove noise
+        
+        // 3. NOISE MODELING via Morphological Closing
+        // Closing = Dilation followed by Erosion
+        // Fills gaps, models background noise envelope
+        CImg<float> closed = performClosing(spectrogram_buffer, getNoiseStructuralElement());
+        components.noise_residual = closed - spectrogram_buffer;
+        components.noise_residual.abs(); // Positive residual only
+        
+        return components;
+    }
+    
+private:
+    void updateSpectrogramBuffer(const float* magnitude, int fft_size) {
+        // Shift buffer left, add new frame on right
+        if (current_frame_idx >= frame_history_size) {
+            // Circular buffer behavior
+            spectrogram_buffer.shift(-1, 0, 0, 0, 2); // Shift left in time dimension
+            current_frame_idx = frame_history_size - 1;
+        }
+        
+        // Copy magnitude spectrum to current frame
+        for (int k = 0; k < fft_size/2 + 1; k++) {
+            spectrogram_buffer(k, current_frame_idx) = magnitude[k];
+        }
+        current_frame_idx++;
+    }
+    
+    CImg<float> performOpening(const CImg<float>& image, const CImg<float>& se) {
+        CImg<float> eroded = image.get_erode(se);
+        return eroded.dilate(se);
+    }
+    
+    CImg<float> performClosing(const CImg<float>& image, const CImg<float>& se) {
+        CImg<float> dilated = image.get_dilate(se);
+        return dilated.erode(se);
+    }
+    
+    CImg<float> getHarmonicStructuralElement() {
+        // Vertical line element for harmonic tracking
+        CImg<float> se(1, 5);
+        se.fill(1);
+        return se;
+    }
+    
+    CImg<float> getNoiseStructuralElement() {
+        // Small square element for noise envelope
+        CImg<float> se(3, 3);
+        se.fill(1);
+        return se;
+    }
+};
+```
+
+### Integration with JUCE Audio Processor:
+```cpp
+class SpectralProcessor : public juce::AudioProcessor {
+private:
+    MorphologicalSpectralProcessor morph_processor;
+    std::vector<float> fft_magnitude;
+    
+public:
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override {
+        const int num_samples = buffer.getNumSamples();
+        const float* input = buffer.getReadPointer(0);
+        float* output = buffer.getWritePointer(0);
+        
+        // Perform STFT with Hamming window
+        for (int frame_start = 0; frame_start < num_samples; frame_start += hop_size) {
+            // Windowing with Hamming
+            applyHammingWindow(input + frame_start, windowed_buffer.data(), window_size);
+            
+            // FFT
+            performFFT(windowed_buffer.data(), fft_complex.data(), fft_size);
+            
+            // Extract magnitude
+            for (int k = 0; k < fft_size/2 + 1; k++) {
+                fft_magnitude[k] = std::abs(fft_complex[k]);
+            }
+            
+            // Morphological analysis
+            auto components = morph_processor.processFrame(fft_magnitude.data(), fft_size);
+            
+            // Apply effects to separated components
+            applySpectralEffects(components);
+            
+            // Reconstruct and IFFT
+            reconstruct(components, fft_complex.data());
+            performIFFT(fft_complex.data(), output_buffer.data(), fft_size);
+            
+            // Overlap-add with Hamming COLA
+            overlapAdd(output_buffer.data(), output + frame_start, window_size, hop_size);
+        }
+    }
+};
+```
+* **Parameter Smoothing:** Each parameter (knob) uses a one-pole low-pass or linear ramp. For example, implement `smoothed = α * prev + (1-α) * input` each sample or block (α set based on a time constant). JUCE’s `SmoothedValue<float>` does this.
+
+## Real-Time Safety
+
+* **Avoid dynamic allocation:** All memory (vectors, arrays) is allocated before audio processing starts. Do not use `new`/`delete` in the audio loop.
+* **No locks in audio thread:** Any shared data (e.g. for GUI) should be updated via lock-free or double-buffer methods. For instance, for waveform display, copy a small snapshot of audio output into a circular FIFO protected by `std::atomic` index counters.
+* **No file or console I/O:** Logging or plotting must be disabled or deferred. Use `DBG()` only in debug mode, never in the real-time path.
+* **Fast math:** Use optimized libraries (kissfft, FFTW with threads) for FFT. Mark math functions as `-ffast-math` if safe. Unroll small loops if needed.
+* **Thread Priorities:** On Linux, ensure the audio thread runs at real-time priority (this is managed by the host/OS, but we should avoid hogging other cores).
+* **Safety Checks:** In debug builds, assert that buffer sizes and indices never exceed bounds. In release, these checks are off for speed.
+
+### Numerical Stability (Smith SASP Ch. 7)
+
+**Phase Unwrapping Robustness**:
+```cpp
+// Enhanced phase unwrapping with error bounds
+float unwrapPhase(float current_phase, float prev_phase, float expected_delta) {
+    float raw_delta = current_phase - prev_phase;
+    float wrapped_delta = fmodf(raw_delta + M_PI, 2*M_PI) - M_PI;
+    
+    // Detect and correct for large phase jumps (> π/2)
+    if (fabsf(wrapped_delta - expected_delta) > M_PI_2) {
+        // Use backup frequency estimation
+        return prev_phase + expected_delta;
+    }
+    return wrapped_delta;
+}
+```
+
+**Spectral Whitening for Peak Detection**:
+```cpp
+// Pre-whiten spectrum for robust peak detection (Smith SASP Ch. 9)
+void spectralWhitening(float* magnitude, int N) {
+    // Compute spectral envelope via cepstral analysis
+    float envelope[N/2];
+    computeSpectralEnvelope(magnitude, envelope, N);
+    
+    // Flatten spectrum relative to envelope
+    for (int k = 0; k < N/2; k++) {
+        magnitude[k] /= fmaxf(envelope[k], 1e-6f); // Avoid div by zero
+    }
+}
+```
+
+### Enhanced STN Decomposition
+
+**Multi-Resolution Analysis**:
+```cpp
+class STNAnalyzer {
+private:
+    // Multiple window sizes for different time-frequency resolutions
+    FFTEngine short_fft;    // 512 samples - transients
+    FFTEngine medium_fft;   // 1024 samples - balanced
+    FFTEngine long_fft;     // 2048 samples - tonal content
+    
+public:
+    void processFrame(float* input, STNComponents& output) {
+        // Parallel analysis at multiple resolutions
+        auto short_result = short_fft.analyze(input);
+        auto medium_result = medium_fft.analyze(input);
+        auto long_result = long_fft.analyze(input);
+        
+        // Intelligent combination based on content
+        combineMultiResolution(short_result, medium_result, long_result, output);
+    }
+};
+```
+
+### Advanced Transient Detection
+
+**Multi-Detector Voting System**:
+```cpp
+struct TransientDetectors {
+    float spectralFlux(const float* current, const float* previous, int N);
+    float highFrequencyContent(const float* spectrum, int N);
+    float complexDomain(const std::complex<float>* X, int N);
+    float phaseDivergence(const float* phases, const float* prev_phases, int N);
+};
+
+class TransientDetector {
+    float computeTransientness(const SpectralFrame& frame) {
+        float votes[4] = {
+            detectors.spectralFlux(frame.magnitude, prev_magnitude, N),
+            detectors.highFrequencyContent(frame.magnitude, N),
+            detectors.complexDomain(frame.complex_data, N),
+            detectors.phaseDivergence(frame.phases, prev_phases, N)
+        };
+        
+        // Weighted voting with adaptive thresholds
+        return weightedAverage(votes, adaptive_weights);
+    }
+};
+```
+
+## Advanced Stereo Processing
+
+### Delay Compensation
+```cpp
+class StereoProcessor {
+private:
+    DelayLine left_delay, right_delay;
+    
+public:
+    void processBlock(juce::AudioBuffer<float>& buffer) {
+        // Ensure L/R channel synchronization
+        auto* left = buffer.getWritePointer(0);
+        auto* right = buffer.getWritePointer(1);
+        
+        // Process with automatic delay compensation
+        int delay_samples = computeProcessingDelay();
+        left_delay.setDelay(delay_samples);
+        right_delay.setDelay(delay_samples);
+        
+        processSpectralContent(left, right, buffer.getNumSamples());
+        
+        // Apply compensation
+        left_delay.processBlock(left, buffer.getNumSamples());
+        right_delay.processBlock(right, buffer.getNumSamples());
+    }
+};
+```
+
+## Build System and Deployment
+
+We will use **CMake** (with Ninja or Make) to manage the build. JUCE provides CMake support (since JUCE 6). The project will include:
+
+* `CMakeLists.txt` referencing JUCE’s CMake modules.
+* External FFT library (if using FFTW, link against it; otherwise include a header-only FFT code like KissFFT).
+* Optionally include Faust-generated `.cpp` via `add_library` or add source.
+* Conditional flags: turn on SSE/AVX optimizations if available (`-msse4.1` etc).
+* Define separate targets for debug/release.
+* If needed, use `add_custom_command` to run `faust2api` automatically when the `.dsp` changes (or include the generated sources in the repository).
+
+Testing can be integrated via CTest or an external script. Performance profiling builds with debug info and release builds with full optimizations will be defined.
+
+### CMake Configuration with Open Source Focus
+```cmake
+cmake_minimum_required(VERSION 3.15)
+project(sound0matic VERSION 0.1.0)
+
+# Enforce open-source dependencies only
+set(REQUIRE_OPEN_SOURCE ON)
+
+# Find packages with license checking
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFTW3 REQUIRED fftw3f)  # GPL-compatible
+
+# JUCE setup with GPL license
+add_subdirectory(JUCE)
+juce_add_plugin(sound0matic
+    PRODUCT_NAME "sound0matic"
+    COMPANY_NAME "nonlinear_laboratories"
+    PLUGIN_MANUFACTURER_CODE "V01D"
+    PLUGIN_CODE "S0M1"
+    FORMATS VST3 LV2 Standalone
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    COPY_PLUGIN_AFTER_BUILD TRUE)
+
+# Compiler optimizations for audio
+target_compile_options(sound0matic PRIVATE
+    -O3 -ffast-math -msse4.1 -mavx
+    $<$<CONFIG:DEBUG>:-g -fsanitize=address>)
+
+# License compliance check
+add_custom_target(license_check
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/scripts/check_licenses.py
+    COMMENT "Verifying all dependencies are GPL-compatible")
+```
+
+### Continuous Integration
+```yaml
+# .github/workflows/build.yml
+name: Build and Test
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libjack-jackd2-dev libasound2-dev \
+                                libfftw3-dev cmake ninja-build
+    
+    - name: License compliance check
+      run: python3 scripts/verify_opensource.py
+    
+    - name: Build
+      run: |
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        ninja -C build
+    
+    - name: Run tests
+      run: ./build/tests/sound0maticTests
+    
+    - name: Performance benchmark
+      run: ./build/benchmarks/performance_test --output benchmark_results.json
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: sound0matic-lnx
+        path: build/sound0matic_artefacts/
+```
+
+## Enhanced Performance Specifications
+
+### Latency Analysis 
+```
+Frame Size (M) | Zero-pad (N) | Hop (R) | Latency | Freq Res | Use Case
+512           | 1024         | 256     | 5.8ms   | 43.1Hz   | Low-latency live
+1024          | 2048         | 512     | 11.6ms  | 21.5Hz   | Balanced
+2048          | 4096         | 1024    | 23.2ms  | 10.8Hz   | High precision
+```
+
+**Adaptive Windowing**: Implement dynamic window sizing based on transient content:
+- Transient frames: Short window (512 samples)
+- Steady-state: Long window (2048 samples)
+- Crossfade between modes to avoid artifacts
+
+### Memory Layout for SIMD Efficiency
+```cpp
+// 32-byte aligned buffers for AVX operations
+struct alignas(32) FFTWorkspace {
+    float* analysis_window;     // M samples, 32-byte aligned
+    float* fft_input;          // N samples, complex interleaved
+    float* fft_output;         // N samples, complex interleaved
+    float* overlap_buffer;     // N+R samples for OLA
+};
+
+// Pre-allocate all buffers in constructor
+void initializeBuffers() {
+    analysis_window = (float*)aligned_alloc(32, M * sizeof(float));
+    // ... etc, with proper cleanup in destructor
+}
+```
+
+### Optimized CImg Usage:
+```cpp
+// Disable CImg display features for audio plugin
+#define cimg_display 0
+#define cimg_use_openmp 1  // Enable parallel processing
+
+// Memory-efficient circular buffer for real-time use
+class EfficientSpectrogramBuffer {
+    std::vector<float> data;
+    int width, height, write_pos;
+    
+public:
+    void addFrame(const float* frame, int frame_size) {
+        // Direct memory copy, avoid CImg overhead in real-time thread
+        std::memcpy(&data[write_pos * frame_size], frame, frame_size * sizeof(float));
+        write_pos = (write_pos + 1) % height;
+    }
+    
+    CImg<float> getCImgView() {
+        // Create CImg view only when needed for morphological ops
+        return CImg<float>(&data[0], width, height, 1, 1, true); // shared=true
+    }
+};
+```
+(This approach maintains real-time safety while leveraging CImg's morphological operations for spectral analysis.)
+
+
+
+# *UI DESIGN*
+
+## Control Groupings
+
+The GUI adopts a **retro analog theme** (dark background, bright knobs/text). Controls are grouped logically:
+
+* **Analysis Section:** Controls for FFT size (small/medium/large), window overlap percentage, and input gain.  A switch to toggle mono/stereo input. Possibly a **Wave Display** showing the incoming waveform and detected transient markers.
+* **Sine Generator Section:** Knobs for sine-level mix, detune knob (coarse/fine frequency shift of all sinusoids), and envelope controls (attack/release) if needed for the partials.
+* **Noise Section:** A filter dial to shape the noise spectrum (low-pass/high-pass), and a mix knob for noise level.
+* **Transient Section:** A threshold knob for transient detection sensitivity, and a toggle for enabling transient-mode processing. Possibly a VU meter showing transient energy.
+* **Effects Section:** Separate panels for **Freeze** (hold/loop control), **Blur/Smear** (intensity knobs), and **Phase** (parameters for phase shuffle or detune). Each effect has a mix or depth knob. Mute/Bypass buttons can be included.
+* **Master Section:** Overall output level, a large **VU meter** or waveform scope, and a preset selector.
+
+Knob layout follows analog conventions (circular knobs with indicator line), toggle switches for on/off, and colored labels. Font selection is a vintage-style display font (e.g. 7-segment or LCD look). Tooltips or small labels clarify each control.
+
+## Waveform/Spectrum Display
+
+A central area shows either:
+
+* **Waveform:** Real-time plot of input or output waveform (or both overlaid).  This uses JUCE `Graphics` to draw a polyline from audio samples.
+* **Spectrum (optional):** Alternatively, a scrolling spectrogram or bar display of |X\[k]| magnitude.  This could use a FFTVisualizer component or custom rendering.
+  At minimum, a simple VU level meter (peak and RMS) is drawn to reflect output volume.
+
+## MIDI Mapping
+
+All major parameters support MIDI controller mapping (MIDI Learn).  The design will use JUCE’s `AudioProcessorParameter` with appropriate IDs so that a host can automate or map MIDI CC.  Typical mapping:
+
+* CC20-23: freeze, blur, smear mix
+* CC24-26: sine/noise mix, detune
+* CC27: transient threshold
+* CC28-30: master volume, filter cutoff (if any)
+  Knob range and response curves (linear or logarithmic) are configured as needed for smooth control.
+
+## Aesthetic Details
+
+* **Colors:** Use a black or dark gray background, with knobs in metallic red or blue. Active regions (when an effect is engaged) glow or light up (e.g. a freeze LED).
+* **Fonts/Textures:** A slight grainy texture or subtle scanlines can simulate vintage hardware.
+* **Indicators:** LEDs or lights next to toggles show status (e.g. “FROZEN” lights when freeze is on).
+* **Responsiveness:** Controls provide immediate visual feedback.  The GUI runs at 60fps (or synced to host) separate from audio.  CPU usage of drawing is minimized by redrawing only when needed (using `setRepaintsOnParameterChange`).
+
+The goal is an intuitive, musical interface: small learning curve for a DSP-savvy user, but also visually appealing to encourage experimentation.
+
+## Enhanced User Interface Design
+
+### Accessibility Features
+```cpp
+class AccessibleUI : public juce::Component {
+    // Keyboard navigation support
+    bool keyPressed(const juce::KeyPress& key) override {
+        if (key.isKeyCode(juce::KeyPress::tabKey)) {
+            focusNextControl();
+            return true;
+        }
+        return Component::keyPressed(key);
+    }
+    
+    // Screen reader support
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override {
+        return std::make_unique<juce::AccessibilityHandler>(
+            *this, juce::AccessibilityRole::group);
+    }
+};
+```
+
+### Performance Monitoring UI
+```cpp
+class PerformanceMonitor : public juce::Component, public juce::Timer {
+private:
+    std::atomic<float> current_cpu_usage{0.0f};
+    std::atomic<int> buffer_underruns{0};
+    
+public:
+    void paint(juce::Graphics& g) override {
+        // Draw CPU meter
+        float cpu = current_cpu_usage.load();
+        g.setColour(cpu > 0.7f ? juce::Colours::red : juce::Colours::green);
+        g.fillRect(0, 0, getWidth() * cpu, getHeight());
+        
+        // Display underrun count
+        g.drawText("Underruns: " + std::to_string(buffer_underruns.load()),
+                   getLocalBounds(), juce::Justification::centred);
+    }
+    
+    void timerCallback() override {
+        repaint(); // Update display at 30fps
+    }
+};
+```
+
+
+
+
+# *DOCUMENTATION & COMMUNITY*
+
+### Developer Documentation
+```markdown
+# Contributing to Sound-0-Matic
+
+## Development Setup
+1. Clone repository: `git clone https://github.com/nonlinearlabs/sound0matic`
+2. Install dependencies: `./scripts/install_deps.sh`
+3. Build: `cmake -B build && ninja -C build`
+
+## Code Standards
+- C++17 minimum, prefer C++20 features when available
+- Real-time safe code in audio thread (no allocations, locks, I/O)
+- All new features must include unit tests
+- Performance regression tests required for DSP changes
+
+## License Requirements
+- All contributions must be compatible with GPLv3
+- No proprietary dependencies allowed
+- Document any new dependencies in LICENSE_THIRD_PARTY.md
+```
+
+### API Documentation
+```cpp
+/**
+ * @brief Core spectral analysis engine implementing STFT with COLA windows
+ * 
+ * Based on principles from Smith's "Spectral Audio Signal Processing"
+ * (https://ccrma.stanford.edu/~jos/sasp/)
+ * 
+ * @example
+ * ```cpp
+ * SpectralEngine engine(1024, 512); // window size, hop size
+ * engine.setWindow(WindowType::Hamming);
+ * 
+ * float input[512], output[512];
+ * engine.processBlock(input, output, 512);
+ * ```
+ */
+class SpectralEngine {
+public:
+    /**
+     * @param window_size Analysis window size (power of 2)
+     * @param hop_size Hop size for overlap-add (typically window_size/2)
+     */
+    SpectralEngine(int window_size, int hop_size);
+    
+    /**
+     * @brief Process audio block in real-time
+     * @param input Input audio samples
+     * @param output Output audio samples  
+     * @param num_samples Number of samples to process
+     * @pre num_samples <= max_block_size (set in constructor)
+     * @post Output contains processed audio with same sample count
+     */
+    void processBlock(const float* input, float* output, int num_samples);
+};
+```
+
+### Community Development
+- Public GitHub repository with CI/CD
+- Issue tracking and feature requests via GitHub Issues
+- Contributor guidelines (CLA not required - simple DCO)
+- Regular releases with semantic versioning
+
+
+
+# *QUALITY ASSURANCE & TESTING*
+
+## Unit Testing and Validation
+
+To ensure correctness:
+
+* **Mathematical Tests:** Write unit tests for core DSP components. For example, verify that `IFFT(FFT(x))` returns `x` for random vectors (within floating-point error). Test that the window-cola property holds: i.e. simulate overlap-add with the chosen window and hop to ensure no gaps or overlaps. Check that parameter smoothing converges as expected.
+* **Transform Accuracy:** Compare the plugin’s FFT/IFFT with a reference (e.g. MATLAB or Python NumPy) on known signals (sine, chirp, noise). Differences should be on the order of 1e-6 or less (floating error).
+* **Regression Tests:** After any code change, run an automated test suite. If a GUI layout changes parameters, ensure IDs and ranges remain consistent (unit tests for parameter bounds).
+* **Round-Trip Tests:** Synthesizing a sound via STN analysis+resynthesis with no processing should reconstruct the original (i.e. pass through). Use a variety of audio clips (tones, speech, noise bursts) in batch mode and compute the error metric.
+
+Faust-generated code can be tested using Faust’s own `-verify` mode or by writing small Faust test benches.
+
+## Performance and Profiling
+
+* Use the **JUCE AudioProcessorProfiler** (or custom timing code) to log `processBlock()` execution time per buffer. Ensure it stays well under the host buffer interval.
+* **Callgrind/Valgrind:** Profile CPU-bound sections (FFT, loops) to find hotspots. Optimize hotspots (e.g. by unrolling loops, using vector instructions).
+* **Stress Testing:** Run the plugin with maximum settings (largest FFT size, all effects on) and measure CPU. The target is <70% CPU usage on the test machine to allow headroom.
+* **Memory Checks:** Use AddressSanitizer (ASan) to catch any leaks or buffer overruns during development.
+* **Real-Time Monitoring:** In DAWs like REAPER or Ardour, monitor for underrun warnings. Run the plugin on a machine with audio priority to see if glitches appear.
+
+## Enhanced Testing Framework
+
+### Automated Regression Testing
+```cpp
+class RegressionTester {
+    struct GoldenReference {
+        std::string test_name;
+        std::vector<float> input_audio;
+        std::vector<float> expected_output;
+        float tolerance;
+    };
+    
+    std::vector<GoldenReference> golden_files;
+    
+public:
+    void generateGoldenReferences() {
+        // Create reference outputs with known-good version
+        for (auto& test : test_cases) {
+            auto output = processWithKnownGoodVersion(test.input);
+            saveGoldenReference(test.name, test.input, output);
+        }
+    }
+    
+    bool runRegressionTest(const std::string& test_name) {
+        auto& ref = findGoldenReference(test_name);
+        auto current_output = processWithCurrentVersion(ref.input_audio);
+        return compareWithTolerance(current_output, ref.expected_output, ref.tolerance);
+    }
+};
+```
+
+### Performance Benchmarking
+```cpp
+class PerformanceBenchmark {
+    struct BenchmarkResult {
+        double avg_cpu_us;      // Average CPU time in microseconds
+        double max_cpu_us;      // Worst-case CPU time
+        double memory_mb;       // Memory usage in MB
+        int dropped_samples;    // Audio dropouts detected
+    };
+    
+public:
+    BenchmarkResult runFullBenchmark() {
+        // Test various scenarios
+        auto results = std::vector<BenchmarkResult>{
+            benchmarkScenario("minimal_settings"),
+            benchmarkScenario("maximum_settings"),
+            benchmarkScenario("transient_heavy"),
+            benchmarkScenario("sustained_tones"),
+            benchmarkScenario("silence_detection")
+        };
+        return aggregateResults(results);
+    }
+};
+```
+
+### Platform-Specific Testing
+```cpp
+// Linux audio system compatibility
+class PlatformTester {
+public:
+    void testAudioSystems() {
+        testJACKCompatibility();
+        testALSACompatibility();
+        testPulseAudioCompatibility();
+        testPipeWireCompatibility(); // Modern Linux
+    }
+    
+    void testPluginFormats() {
+        testVST3Loading();
+        testLV2Compliance();  // Linux standard
+        testCLAPSupport();    // Emerging standard
+    }
+};
+```
+
+## User Testing
+
+Arrange a listening session with audio peers to evaluate artifact levels (grain, distortion, latency). Check that interactive knobs respond smoothly (no clicks). Ensure the GUI reflects parameter changes accurately. Collect feedback on usability and add any missing convenience features (like midi learn hints or presets).
+
+
+
+# FUTURE ENHANCEMENTS
+
+## Future Features
+
+Looking ahead, possible enhancements include:
+
+* **Auto-Pitch Detection:** Implement a fundamental-frequency (F0) tracker to sync effects to musical pitch.  For example, use the YIN algorithm or cepstral methods to find the input pitch in real time.  This could drive pitch-shift ratios or harmonic synthesis.
+* **Modulation Matrix:** A full modulation matrix where any LFO or envelope generator can modulate any parameter.  For instance, use an ADSR on spectral blur amount, or an LFO on the detune.  This adds expressive dynamic control.
+* **Polyphony Support:** Expand from monophonic to multi-voice spectral sampler.  This would involve voice allocation logic, e.g. one STN analysis per active note.  Use a polyphonic output layer with multiple FFT buffers.  (Complex but would allow chords to be sampled.)
+* **Extended Formats:** Support more plugin formats (e.g. LV2 and CLAP for Linux), or a standalone mode with JACK/ALSA.  Also consider a version that outputs OSC or CV signals (for modular synth integration).
+* **Alternative Analyses:** Allow choosing other transforms like wavelets or multi-resolution FFT (e.g. Meyda-inspired filter banks) for different time-frequency trade-offs.
+* **User Interface:** Add skinning support to change the aesthetic.  Or implement a dual-mode UI (classic vs. minimal) for advanced users.
+* **Algorithmic Research:** Explore novel spectral effects from recent literature, such as continuous-tone freezing or machine-learning-driven spectral interpolation (though this veers outside classical DSP).
+
+These enhancements are beyond the initial release scope, but planned if time and demand allow. Each would be evaluated for feasibility and impact on performance.

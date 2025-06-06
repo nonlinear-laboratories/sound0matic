@@ -1,0 +1,382 @@
+\= SPEC-001: sound0matic_mk1 spectral sampler synth 
+
+\== Licence
+
+FOSS or GPL or other open-source option
+
+\== Branding
+
+The Sound-O-Matic Mk1, developed by Nonlinear Laboratories, is a monophonic spectral sampler that is inspired by mid-century scientific devices and postwar experimental acoustics; where robust, hand-built equipments hum with arcane energy. Designed with a mix of retro charm and spectral DSP complexity. Available soon as Standalone/VST3/LV2.
+
+"It's a synth that features a tactile, analog interface housed in a worn chassis of brushed aluminum and deep-stained walnut paneling; accented with tarnished brass and rusted steel elements. Controls consist of chunky bakelite dials with hand-written and stenciled labels, satisfyingly clunky toggle switches, and push buttons with a subtle, internal glow. Exposed, cloth-covered wiring, visible vacuum tubes with a warm, inner luminescence, and utilitarian meters, all hinting at complex internal workings beneath their simple, functional exterior. From its chrome "Sound-O-Matic" emblem to scattered, distressed warning labels, every element exudes an air of arcane scientific purpose and the raw, imperfect charm of a machine crafted for groundbreaking, if not slightly dangerous, sonic experimentation. The kind of monstrosity that would be wheeled out at a lecture in MIT’s acoustics lab with phrases like "modulating timefields” and “transwave energetics.”  – a high-voltage, analog-era machine capable of unraveling and reshaping sound on a spectral level, perfectly suited for the adventurous sound designer." -said nobody
+
+
+\== Background
+
+The Sound-O-Matic is an open-source monophonic, performance-oriented spectral sampler synthesizer developed by Nonlinear Laboratories. It is not a traditional sampler. Instead, it deconstructs incoming audio into spectral and temporal components via STN analysis (Sinusoidal, Transient, Noise) and applies real-time transformations such as spectral blur, freeze, smear, and complex phase modulation. It is built for experimental sound design but retains MIDI-based playability with sample-based pitch mapping and envelope control.
+
+\== Requirements
+
+The following are the MVP requirements for the sound0matic plugin, grouped using MoSCoW prioritization:
+
+\=== Must Have
+
+* [ ] Manual root note selector (e.g., dropdown or MIDI learn) to define sample pitch for correct MIDI mapping
+* [ ] Real-time `.wav` sample loading into an internal buffer (file I/O may be handled by host or plugin)
+* [ ] Monophonic MIDI input handling (note, velocity, pitch bend)
+* [ ] Sample playback using fixed-speed buffer reading
+* [ ] MIDI-based pitch shifting via phase vocoder (not resampling)
+* [ ] STN decomposition (Sinusoidal / Transient / Noise) with sensitivity control and recombination
+* [ ] FFT-based spectral processing (blur, freeze, smear)
+* [ ] Phase-domain manipulation (offset, locking)
+* [ ] Phase vocoder smoothing to reduce zipper/aliasing artifacts
+* [ ] ADSR amplitude envelope (gated by MIDI note or toggle)
+* [ ] Stereo output with drive and widening options
+* [ ] Host plugin integration (LV2 or VST3) using Faust and JUCE
+* [ ] Basic UI with sliders, toggles, and waveform/sample preview
+
+\=== Should Have
+
+* [ ] Visual FFT/Spectrum display (toggleable)
+* [ ] LFO modulation routing (target: FFT mix, spectral tilt, etc.)
+* [ ] Limiter on final output (brick wall or soft-knee acceptable)
+* [ ] Preset save/load system (host-managed or internal)
+* [ ] Parameter automation (DAW-controllable)
+* [ ] Expanded phase-domain manipulation (stereo signal creation and processing)
+* [ ] Auto-convert stereo samples to mono on load
+* [ ] Adjustable FFT size at runtime
+* [ ] Phase Texture (adds micro-jitter to increase width)
+* [ ] Phase Randomization (adds band-limited noise per bin)
+
+\=== Could Have
+
+* [ ] Auto pitch detection (e.g., YIN) for estimating root note when loading samples
+* [ ] Future incorporation of advanced DSP techniques (e.g., perceptual STN, log-frequency bins, phase reassignment)
+* [ ] Drag-and-drop sample support in the GUI
+* [ ] Auto pitch detection for root note estimation (e.g., YIN)
+* [ ] Modulation matrix (MIDI CC assignable)
+* [ ] Host tempo sync for LFOs and gated FX
+* [ ] Additional spectral processing (feedback, perceptual binning, spectral tilt with LF/HF biasing)
+* [ ] Real-time support for other formats (AIFF, FLAC)
+* [ ] Variability in sample file length and sample rate (e.g., 44.1kHz, 48kHz support)
+
+\=== Won’t Have (for MVP, but may be explored after)
+
+* [ ] IRCAM-style psychoacoustic DSP and high-complexity spectral models
+* [ ] Polyphony or voice stacking
+* [ ] Multi-sample zones or mapping layers
+* [ ] Complex GUI skinning or custom 2D/3D visuals
+* [ ] Built-in reverb, delay, or non-spectral effects
+
+
+\== Methodology
+
+\=== Overview
+
+The Sound-O-Matic will be implemented as a monophonic VST3/LV2 plugin and standalone application using JUCE as the primary framework. Sample loading, plugin integration, and UI will be handled in C++ using JUCE. The spectral and phase-domain DSP effects will initially be implemented in JUCE directly, with optional helper modules generated via Faust and compiled into standalone C++ classes.
+
+The core sampler engine will be based on real-time playback of a trimmed region from an arbitrary-length `.wav` sample. Playback occurs at a constant speed, and pitch control is applied via a phase vocoder operating in the FFT domain, driven by MIDI input. The signal is shaped with an ADSR envelope, and passed through a modular chain of spectral and phase-domain transformations.
+
+\=== Architecture Diagram
+
+## \[plantuml, architecture, png]
+
+@startuml
+
+package "JUCE Plugin Host" {
+\[JUCE UI] --> \[Sample Loader]
+\[JUCE UI] --> \[Playback Controls]
+\[Sample Loader] --> \[Sample Buffer (Float)]
+\[MIDI Input] --> \[Playback Controls]
+\[Playback Controls] --> \[FFT Engine]
+\[FFT Engine] --> \[STN Decomposition]
+\[STN Decomposition] --> \[STN Sum → Pitch Shifter]
+\[STN Sum → Pitch Shifter] --> \[Phase Vocoder (MIDI Pitch)]
+\[Phase Vocoder (MIDI Pitch)] --> \[Spectral FX Chain]
+\[Spectral FX Chain] --> \[Phase FX Chain]
+\[Phase FX Chain] --> \[Post FX (ADSR, Drive, Stereo)]
+\[Post FX (ADSR, Drive, Stereo)] --> \[Stereo Output]
+}
+
+@enduml
+
+\=== Component Breakdown
+
+\==== Sample Loader
+
+* Loads arbitrary-length `.wav` files via JUCE's `AudioFormatReader`
+* Resamples if needed to match plugin sample rate
+* Converts stereo → mono using L+R average if needed
+* Allows trimming of start/end range via UI sliders
+* Outputs buffer to fixed-speed playback module
+
+\==== FFT Engine
+
+* Applies Hamming window and performs real-time STFT
+* Window size is adjustable (256–8192 samples)
+* Operates with overlapped frames and hop size control
+* Outputs magnitude/phase arrays to STN module
+
+\==== STN Decomposition
+
+* Uses FFT bins to classify components into Sinusoidal / Transient / Noise
+* Classification runs once per sample load or when manually triggered via UI
+* Bin classifications (masks) are cached and reused per frame
+* Gain for each component is applied in real-time via sliders: `M_out = sin_mask * sin_gain + trans_mask * trans_gain + noise_mask * noise_gain`
+* Allows dynamic timbral control during playback without recomputing classifications
+* Components are recombined into a single output for further processing
+
+\==== Phase Vocoder (Pitch Shifter)
+
+* Accepts a user-defined root note to determine the sample's base pitch
+* Calculates pitch ratio from incoming MIDI note and root note: `2^((midi - root) / 12)`
+* Reads MIDI pitch, applies time-stretching and pitch-shifting via phase delta scaling
+* Includes smoothing to reduce zipper and aliasing artifacts
+* Operates on phase array before other phase FX
+
+\==== Spectral FX Chain
+
+* Applies blur, freeze, smear to magnitude spectrum
+* Each effect is modular and UI-toggled
+
+\==== Phase FX Chain
+
+* Applies phase-domain transformations (offset, lock, jitter)
+* Each effect is modular and UI-toggled
+* Operates after pitch-shifting
+* Outputs stereo-differentiated phase for iFFT
+
+\==== Post FX
+
+* ADSR Envelope applied to final audio signal
+* Drive stage (tanh soft clip)
+* Stereo widening via phase offset
+* Final limiter (brick wall)
+* Each effect is modular and UI-toggled
+
+\==== JUCE UI
+
+* File browser or drag-and-drop loader
+* Sample waveform display with start/end controls
+* Controls for all DSP params: sliders, toggles, meters
+* Preset manager using `AudioProcessorValueTreeState`
+
+\==== Optional: Faust Integration
+
+* Selected DSP modules (e.g., STN, FFT, Phase Vocoder) implemented in `.dsp`
+* Compiled to `.cpp` with `faust -lang cpp`
+* Embedded as modules in `FaustModules/` directory
+
+
+\== Implementation
+
+\=== Phase 1: JUCE Plugin and Sample Loader
+
+1. **Initialize JUCE Plugin Project**
+
+   * Use Projucer or CMake to create VST3/LV2-ready JUCE plugin.
+   * Enable JUCE modules for audio format reading, UI, and MIDI input.
+
+2. **Build Sample Loader Module** (`SampleLoader.cpp/.h`)
+
+   * Load `.wav` files with `AudioFormatReader`
+   * Convert stereo to mono (if needed)
+   * Resample to match host sample rate
+   * Trim start/end based on UI-controlled playback range
+   * Store buffer for FFT processing (not playback)
+
+3. **Display Waveform + Trim UI**
+
+   * Draw waveform using `AudioThumbnail`
+   * Implement start/end region sliders
+   * Bind controls to internal parameters
+
+\=== Phase 2: FFT & STN Framework
+
+1. **Implement FFT Engine** (`FFTProcessor.cpp/.h`)
+
+   * Use JUCE `dsp::FFT` or Faust-generated equivalent
+   * Apply windowing (Hamming), perform overlap-add
+   * Output magnitude/phase arrays
+
+2. **Implement STN Decomposition** (`STNModule.cpp/.h` or Faust)
+
+   * Classify FFT bins into Sinusoidal / Transient / Noise using energy & delta-phase heuristics
+   * Add `sensitivity` control
+   * Separate gains for sin/trans/noise
+   * Recombine into single signal before vocoder
+
+\=== Phase 3: Phase Vocoder for Pitch Shifting
+
+1. **Build Phase Vocoder Module** (`PhaseVocoder.cpp/.h` or Faust)
+
+   * Read MIDI note and pitch bend
+   * Modify phase deltas according to pitch ratio
+   * Apply per-bin smoothing to prevent zipper noise or artifacts
+   * Output pitch-shifted phase and original magnitude
+
+2. **Test constant-speed sample playback + MIDI pitch control**
+
+   * Validate pitch accuracy and low latency
+
+\=== Phase 4: Spectral + Phase FX Chains
+
+1. **Create Spectral FX Chain** (`SpectralFX.cpp/.h`)
+
+   * Freeze (static spectrum hold)
+   * Blur (bin smoothing)
+   * Smear (temporal feedback)
+   * Implement toggle and dry/wet controls
+
+2. **Create Phase FX Chain** (`PhaseFX.cpp/.h`)
+
+   * Offset: apply static or modulated phase shift
+   * Lock: smooth inter-frame phase transitions
+   * Texturize: adds micro-jitter to increase stereo differencial
+   * Implement stereo L/R split
+
+\=== Phase 5: iFFT + Post Processing
+
+1. **Reconstruct Audio from Spectrum**
+
+   * iFFT using overlap-add
+   * Feed signal to post FX stage
+
+2. **Build Post FX Chain** (`PostFX.cpp/.h`)
+
+   * ADSR envelope (triggered by MIDI gate)
+   * Drive stage (tanh or saturation)
+   * Stereo widening
+   * Limiter on final output
+
+\=== Phase 6: UI, Automation, and Presets
+
+1. **UI Binding**
+
+   * Use `AudioProcessorValueTreeState` for all UI ↔ DSP parameters
+   * Link sliders, toggles, and dropdowns to effects modules
+
+2. **Preset Management**
+
+   * Implement save/load using JUCE `ValueTree` serialization
+   * Add user preset browser or load/save buttons
+
+3. **DAW Automation + Parameter ID**
+
+   * Define unique parameter IDs
+   * Test DAW automation and state restore
+
+\=== Phase 7: Faust Integration
+
+1. Write `.dsp` files for:
+
+   * `FFTCore.dsp`, `STNModule.dsp`, `PhaseVocoder.dsp`, etc.
+
+2. Compile to C++:
+
+   ```bash
+   faust -lang cpp -cn FFTCore -o FFTCore.cpp FFTCore.dsp
+   ```
+
+3. Embed into JUCE and wrap in C++ classes
+
+   * Ensure thread-safe parameter access
+
+4. Replace internal JUCE logic with Faust modules as needed
+
+
+\=== # Sound0matic Developer Overview
+
+- OS: Linux x64 6.13.8-4-liquorix-amd64 
+
+## Project Layout
+```
+~/dev/
+├── JUCE/                    # JUCE SDK (external, untouched)
+├── playground/              # Testing location for project
+├── sound0matic/             # Main project
+│   ├── .vscode/             # Editor settings
+│   ├── build/               # >CMake/ninja builds
+│   ├── documentation/       # Blueprints, notes, specs, etc.
+│   ├── Resource/            # Samples, splash images, icons
+│   ├── Source/              # JUCE modules (PluginProcessor, SampleLoader, etc.)
+│   ├── CMakeLists.txt       # Main CMake build file
+│   ├── .clang-format        # Code style guide
+│   └── .editorconfig        # Basic text editor rules
+```
+
+## Build Instructions (Linux)
+
+```bash
+sudo apt install build-essential cmake ninja-build libgtk-3-dev libasound2-dev
+cd ~/dev/sound0matic
+cmake -Bbuild -S. -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+```
+
+Resulting `.vst3` file is installed to `~/.vst3/` for testing in Carla.
+
+## Plugin Targets
+
+- Format: VST3 (MVP)
+- Future: Standalone (JACK/ALSA), LV2
+
+## Editor / IDE
+
+- VSCodium 1.100.03093
+- Extensions: CMake Tools, C/C++, Clang-Format, YAML
+
+
+\== Notes
+
+* Internal plugin ID: `nll.sound0matic`
+* Plugin codes: `V01D` (manufacturer), `S0M1` (product)
+* All `.dsp` files (if used) compiled via `faust -lang cpp`
+* Pitch detection via YIN (if used)
+* Naming style: lower\_snake\_case for files, camelCase in code
+
+\=== Testing
+
+* Test with mono and stereo `.wav` files of different lengths
+* Validate MIDI pitch tracking via vocoder
+* Confirm FFT chain integrity
+* Check STN output vs sensitivity control
+* Evaluate spectral/phase FX impact on timbre
+* Measure latency, CPU usage, and automation support
+
+\== Milestones
+
+1. **Fixed-Rate Sample Playback** with MIDI-driven vocoder pitch
+2. **FFT + STN + Pitch Vocoder Chain** verified
+3. **Spectral + Phase FX with Stereo Out** tested
+4. **UI + Automation + Preset Save/Load** fully integrated
+5. **Final LV2/VST3 Plugin Build for Linux** with optional Faust
+
+\== Gathering Results
+
+* User testing for spectral clarity and pitch tracking accuracy
+* Evaluation of STN separation quality and sensitivity control behavior
+* Measurement of phase vocoder artifacts before/after smoothing
+* Verification of CPU efficiency and modular bypasses
+* Feedback on UI/UX and sound quality from early testers
+
+\== Original Mission Statement
+
+**Spectral/Phase-Based Synth Sampler v.0.0.1**
+A real-time, performance-oriented spectral/phase sampler. It’s designed to create unique textures, pitch-modulated atmospheres, harmonic drifts, and time-smearing artifacts from `.wav` samples—while maintaining **musical playability** and low CPU overhead.
+It’s **not** a standard sampler. It deconstructs audio into its spectral and temporal parts, then re-synthesizes the signal in expressive and often surreal ways.
+The core functionality revolves around transforming a loaded sound source using FFT-based processing techniques. The synthesizer processes a single audio sample using FFT-based spectral manipulation, phase vocoding, and transient detection. The engine should be controllable via MIDI and provide user-definable parameters for all key features. The GUI is intended to be minimal and functional, prioritizing ease of use over visual aesthetics.
+The primary sound source is a single audio sample loaded into the synthesizer. The engine should load a single mono (or converts to mono) audio sample from an external source. This sample can be manipulated in several ways before spectral processing is applied. The sample's pitch can be shifted in real-time based on incoming MIDI note messages. The sample's amplitude is controlled by MIDI velocity. A user-definable slider controls the amount of velocity sensitivity. 
+The synthesizer also aims to incorporate phase vocoding techniques to improve the quality of time-stretching and pitch-shifting. Furthermore, it aims to include transient detection to allow for separate processing of transient and sustained portions of the audio signal.
+The output of the engine should be stereo. The three phase manipulation techniques should be used to create a stereo image. Phase Offset: Apply a different phase offset to the left and right channels. This can create a subtle stereo widening effect.  Phase Randomization: Correlate the phase randomization between the left and right channels. use the same random number generator for both channels but with different seeds. Phase Locking: Use a spatialization algorithm to position the different frequency components in the stereo field based on their phase relationships.
+The loaded sample undergoes FFT analysis. The FFT size is user-definable via a dropdown menu (512, 1024, 2048, 4096). The hop size is user-definable via a slider, expressed as a percentage of the FFT size (0% to 90%). Hamming windowing is used for all FFT analysis.
+Implement the following spectral manipulation techniques: Spectral Blurring (user-definable amount via slider, 0% to 100%), and Spectral Freezing (user-definable enable/disable via toggle, and freeze time via slider).
+Implement the following phase manipulation techniques: Phase Locking (user-definable amount via slider, 0% to 100%), Phase Randomization (user-definable amount via slider, 0% to 100%), and Phase Offset (user-definable amount via slider, -180 to +180 degrees).
+Implement phase vocoding with the following user-definable parameters: Time Stretch Factor (slider), Pitch Shift Factor (slider), and Overlap Factor (slider, 0% to 90%).
+Implement transient detection with the following user-definable parameters: Detection Threshold (slider, 0 to 1), Attack Time (slider), Release Time (slider). The transient and sustained portions of the signal should have separate amplitude controls (sliders, 0% to 200%) and separate filter cutoff controls (sliders, linked to the filter section).
+Implement both a low-pass and a high-pass filter, each with user-definable cutoff frequency (slider) and resonance (Q, slider).
+Implement an ADSR envelope with user-definable Attack Time (slider), Decay Time (slider), Sustain Level (slider, 0 to 1), and Release Time (slider).
+Implement preset management externally (the Faust code itself will not handle preset saving/loading).
+The following subsections should have independent on/off buttons to save cpu load: Sample Playback, Spectral Processing, Phase Manipulation, Transient Detection, ADSR Envelope, and Filtering.
+Implement input gain (slider) and an output limiter.
+All parameters should be mappable to MIDI CC messages. The MIDI CC mapping should be handled externally.

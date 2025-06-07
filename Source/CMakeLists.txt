@@ -26,6 +26,7 @@ target_sources(sound0matic PRIVATE
     PluginEditor.cpp
     SampleLoader.cpp
     FFTProcessor.cpp
+    Morphology.cpp
     STNModule.cpp
     PhaseVocoder.cpp
     SpectralFX.cpp

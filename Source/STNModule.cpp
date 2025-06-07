@@ -1,4 +1,28 @@
-// STNModule.cpp - decomposes into sin/trans/noise
-#include "STNProcessor.h"
+// STNModule.cpp
+#include "STNModule.h"
+#include "Morphology.h"
 
-// Currently empty; implementation will be added later
+STNModule::STNModule()
+{
+}
+
+void STNModule::analyze(const juce::AudioBuffer<float> &magnitude)
+{
+     Morphology::extractComponents(magnitude, sinusoidMask, transientMask,
+                                   residualMask);
+}
+
+const juce::AudioBuffer<float> &STNModule::getSinusoidMask() const
+{
+     return sinusoidMask;
+}
+
+const juce::AudioBuffer<float> &STNModule::getTransientMask() const
+{
+     return transientMask;
+}
+
+const juce::AudioBuffer<float> &STNModule::getResidualMask() const
+{
+     return residualMask;
+}

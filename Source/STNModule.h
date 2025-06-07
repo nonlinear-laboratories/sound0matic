@@ -5,11 +5,16 @@
 class STNModule
 {
    public:
-     STNProcessor() = default;
-     ~STNProcessor() = default;
+     STNModule();
 
-     void processBlock(juce::AudioBuffer<float> &buffer)
-     {
-          // TODO: Implement STN processing
-     }
+     void analyze(const juce::AudioBuffer<float> &magnitude);
+
+     const juce::AudioBuffer<float> &getSinusoidMask() const;
+     const juce::AudioBuffer<float> &getTransientMask() const;
+     const juce::AudioBuffer<float> &getResidualMask() const;
+
+   private:
+     juce::AudioBuffer<float> sinusoidMask;
+     juce::AudioBuffer<float> transientMask;
+     juce::AudioBuffer<float> residualMask;
 };

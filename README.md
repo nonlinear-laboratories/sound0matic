@@ -11,7 +11,7 @@ The **Sound-0-Matic** is a spectral performance instrument and sampler plugin bu
 ---
 
 > 🚧 **Status: WIP (Work in Progress)**  
-> This project is currently under heavy development. Expect instability, missing features, and lots of experiments.
+> This project is currently under heavy development. Expect lots of instability, missing features, and experimentation.
 ---
 
 

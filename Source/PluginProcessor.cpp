@@ -112,6 +112,32 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
           for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
                buffer.setSample(ch, i, outSample);
      }
+
+     // Convert real+imag to magnitude for STN analysis
+     juce::AudioBuffer<float> magnitude;
+     magnitude.setSize(fftProcessor.real.getNumChannels(),
+                       fftProcessor.real.getNumSamples());
+
+     for (int ch = 0; ch < magnitude.getNumChannels(); ++ch)
+     {
+          const float *realData = fftProcessor.real.getReadPointer(ch);
+          const float *imagData = fftProcessor.imag.getReadPointer(ch);
+          float *magData = magnitude.getWritePointer(ch);
+
+          for (int i = 0; i < magnitude.getNumSamples(); ++i)
+               magData[i] =
+                   std::sqrt(realData[i] * realData[i] + imagData[i] * imagData[i]);
+     }
+
+     // Pass to STN to analyze spectral magnitude
+     stnModule.analyze(magnitude);
+
+     // Optional: use masks for different processing paths
+     auto &sMask = stnModule.getSinusoidMask();
+     auto &tMask = stnModule.getTransientMask();
+     auto &rMask = stnModule.getResidualMask();
+
+     // TODO: apply masks to real/imag or create routing logic
 }
 
 juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter()

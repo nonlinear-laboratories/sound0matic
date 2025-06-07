@@ -2,11 +2,13 @@
 
 #pragma once
 
+#include <JuceHeader.h>
+
 #include "FFTProcessor.h"
 #include "PostFX.h"
+#include "STNModule.h"
 #include "SampleLoader.h"
 #include "SpectralFX.h"
-#include <JuceHeader.h>
 
 class Sound0maticProcessor : public juce::AudioProcessor
 {
@@ -44,6 +46,7 @@ class Sound0maticProcessor : public juce::AudioProcessor
      int playbackPosition = 0;
      juce::AudioBuffer<float> workingBuffer;
      FFTProcessor fftProcessor{1024, 512}; // or whatever value
+     STNModule stnModule;
      SpectralFX spectralFX;
      PostFX postFX;
 

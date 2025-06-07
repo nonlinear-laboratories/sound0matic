@@ -5,6 +5,8 @@
 #include <JuceHeader.h>
 
 #include "FFTProcessor.h"
+#include "PhaseFX.h"
+#include "PhaseVocoder.h"
 #include "PostFX.h"
 #include "STNModule.h"
 #include "SampleLoader.h"
@@ -47,7 +49,9 @@ class Sound0maticProcessor : public juce::AudioProcessor
      juce::AudioBuffer<float> workingBuffer;
      FFTProcessor fftProcessor{1024, 512}; // or whatever value
      STNModule stnModule;
+     PhaseVocoder vocoder;
      SpectralFX spectralFX;
+     PhaseFX phaseFX;
      PostFX postFX;
 
      JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sound0maticProcessor)

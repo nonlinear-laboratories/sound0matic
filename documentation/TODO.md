@@ -1,5 +1,6 @@
-# TODO
+# THINGS TO DO
 
+---
 - [x] CMake: JUCE add_subdirectory + plugin declaration
 - [x] JUCE PluginProcessor + header stub
 - [x] VST3 plugin build verified

@@ -1,7 +1,5 @@
 # Sound0matic Developer Overview
 
-- OS: Linux x64 6.13.8-4-liquorix-amd64 
-
 ## Project Layout
 
 ```
@@ -37,8 +35,9 @@ Resulting `.vst3` file is installed to `~/dev/playground/` for testing in Carla.
 
 ## Editor / IDE
 
+- OS: Linux x64 6.13.8-4-liquorix-amd64 
 - VSCodium 1.100.03093
-- Extensions: CMake Tools, C/C++, Clang-Format, YAML
+- Extensions: C/C++, CMake Tools, Clang-Format, Markdown All-in-One, PlantUML, YAML
 
 
 ## Notes

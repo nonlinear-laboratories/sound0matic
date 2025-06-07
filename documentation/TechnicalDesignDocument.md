@@ -1,6 +1,11 @@
 # **The Sound-0-Matic mk1 Technical Design Document**
 
-## **Table of Contents** ...tbd
+> 🚧 **(Work in Progress)** 🚧
+---
+
+## **Table of Contents**
+
+ ...tbd
 
 ---
 ## Introduction

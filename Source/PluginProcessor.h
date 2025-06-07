@@ -1,8 +1,5 @@
 // PluginProcessor.h
-
 #pragma once
-
-#include <JuceHeader.h>
 
 #include "FFTProcessor.h"
 #include "PhaseFX.h"
@@ -11,6 +8,7 @@
 #include "STNModule.h"
 #include "SampleLoader.h"
 #include "SpectralFX.h"
+#include <JuceHeader.h>
 
 class Sound0maticProcessor : public juce::AudioProcessor
 {
@@ -18,9 +16,11 @@ class Sound0maticProcessor : public juce::AudioProcessor
      Sound0maticProcessor();
      ~Sound0maticProcessor() override;
 
+     juce::AudioProcessorValueTreeState parameters;
+
+     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
      void prepareToPlay(double sampleRate, int samplesPerBlock) override;
      void releaseResources() override;
-
      bool isBusesLayoutSupported(const BusesLayout &layouts) const override;
      void processBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &) override;
 
@@ -28,7 +28,6 @@ class Sound0maticProcessor : public juce::AudioProcessor
      bool hasEditor() const override;
 
      const juce::String getName() const override;
-
      bool acceptsMidi() const override;
      bool producesMidi() const override;
      bool isMidiEffect() const override;
@@ -47,7 +46,7 @@ class Sound0maticProcessor : public juce::AudioProcessor
      SampleLoader sampleLoader;
      int playbackPosition = 0;
      juce::AudioBuffer<float> workingBuffer;
-     FFTProcessor fftProcessor{1024, 512}; // or whatever value
+     FFTProcessor fftProcessor{1024, 512};
      STNModule stnModule;
      PhaseVocoder vocoder;
      SpectralFX spectralFX;

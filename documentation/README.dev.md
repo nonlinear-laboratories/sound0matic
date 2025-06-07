@@ -11,7 +11,7 @@
 │   ├── build/               # >CMake/ninja builds
 │   ├── documentation/       # Blueprints, notes, specs, etc.
 │   ├── Resource/            # Samples, splash images, icons
-│   ├── Source/              # JUCE modules (PluginProcessor, SampleLoader, etc.)
+│   ├── Source/              # C++/Faust/JUCE modules (PluginProcessor, SampleLoader, etc.)
 │   ├── third_party/         # Dependencies (CImg, etc.)
 │   ├── CMakeLists.txt       # Main CMake build file
 │   ├── .clang-format        # Code style guide
@@ -43,37 +43,73 @@ Resulting `.vst3` file is installed to `~/dev/playground/` for testing in Carla.
 
 ## Notes
 
-* Internal plugin ID: `nll.sound0matic`
-* Plugin codes: `V01D` (manufacturer), `S0M1` (product)
-* All `.dsp` files (if used) compiled via `faust -lang cpp`
-* Pitch detection via YIN 
+ The plugin is called `sound0matic` internally, it is only referred to as **"The Sound-0-Matic mk1"** in documentation and UI.
 
-// clang formatting preferences
-Language: Cpp
-BasedOnStyle: LLVM
-IndentWidth: 5
-TabWidth: 5
-UseTab: Never
-BreakBeforeBraces: Allman
-AllowShortIfStatementsOnASingleLine: false
-AllowShortBlocksOnASingleLine: false
-AlwaysBreakTemplateDeclarations: Yes
-ReflowComments:  true
-PointerAlignment: Right
-IdentifierNaming:
-     FunctionCase: lower_case
-     VariableCase: lower_case
-     ClassCase: CamelCase
-     StructCase: CamelCase
-     EnumCase: CamelCase
-     EnumConstantCase: UPPER_CASE
-     MemberCase: lower_case
-     PrivateMemberPrefix: "_"
-     ConstantCase: UPPER_CASE
-     GlobalConstantCase: UPPER_CASE
-IncludeCategories:
-     - Regex: '^"(juce|faust)/'
+   Internal plugin ID: `nll.sound0matic`
+   Plugin codes: `V01D` (manufacturer), `S0M1` (product)
+   All `.dsp` files (if used) compiled via `faust -lang cpp`
+   Clang-Format Preferences
+- Language: Cpp 
+- BasedOnStyle: LLVM
+- IndentWidth: 5
+- TabWidth: 5
+- UseTab: Never
+- BreakBeforeBraces: Allman
+- AllowShortIfStatementsOnASingleLine: false
+- AllowShortBlocksOnASingleLine: false
+- AlwaysBreakTemplateDeclarations: Yes
+- ReflowComments:  true
+- PointerAlignment: Right
+- IdentifierNaming:
+   - FunctionCase: lower_case
+   - VariableCase: lower_case
+   - ClassCase: CamelCase
+   - StructCase: CamelCase
+   - EnumCase: CamelCase
+   - EnumConstantCase: UPPER_CASE
+   - MemberCase: lower_case
+   - PrivateMemberPrefix: "_"
+   - ConstantCase: UPPER_CASE
+   - GlobalConstantCase: UPPER_CASE
+- IncludeCategories:
+   - Regex: '^"(juce|faust)/'
        Priority: 1
-     - Regex: '.*'
-       Priority: 2
+   - Regex: '.*'
+       Priority: 2*
 
+## What We've Got so far
+* **Core pipeline**: SampleLoader → FFTProcessor → PhaseVocoder → SpectralFX → PhaseFX → ISTFT → PostFX
+* **STN analysis (sinusoid/transient/residual)**: Morphology & STNModule are wired and producing masks
+* **Stubs in place**: PhaseVocoder, SpectralFX, PhaseFX, PostFX, PluginEditor
+
+## What Comes Next
+
+* **PhaseVocoder Implementation**
+   * Flesh out pitch-/time-shifting: implement basic phase vocoder internals, pitch-shift ratio control, and midi-based mapping.
+   * Write tests or debug output to verify pitch correctness.
+* **STN Mask Application**
+   * Magnitude-only masks: multiply magnitude by masks, then reconstruct with original phase
+   * Integrate masking into the `processBlock()` flow.
+* **PluginEditor + Parameter Binding & GUI**
+   * Define control parameters: pitch ratio, time-stretch, bypass switches, mask routing toggles.
+   * Wire parameters (`AudioProcessorValueTreeState`) to GUI components.
+   * Build a minimal UI for testing signal flow interactively.
+* **SpectralFX Implementation**
+   * Replace stub blur/freeze smear with real FFT-domain effects.
+   * Test with known spectra to validate effect behavior.
+* **PhaseFX Implementation**
+   * Add simple stereo widening, phase offset, etc.
+   * Create controls and verify audible effect.
+* **End-to-End Testing in a Host (Carla, Reaper, etc.)**
+   * Investigate why Carla is crashing—possibly checksum, settings, or plugin configuration.
+   * Use logging or debug builds via `lldb`/`gdb` to capture the crash reason.
+   * Confirm plugin loads correctly in other hosts (e.g. `Reaper`, `Helm`, `Ardour`, `Audacity`).
+
+### Recommended Order
+
+1. **Get audio loading and pitch/time-shift working** (e.g. map a MIDI note to pitch shift).
+2. **Apply STN masks and observe changes in output (magnitude-based)**.
+3. **Add a simple UI so you can tweak things in realtime**.
+4. **Then move on to refining SpectralFX and PhaseFX components**.
+5. **Finally stabilize the host loading and plugin metadata**.
+---

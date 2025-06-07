@@ -43,7 +43,7 @@ class Sound0maticProcessor : public juce::AudioProcessor
      SampleLoader sampleLoader;
      int playbackPosition = 0;
      juce::AudioBuffer<float> workingBuffer;
-     FFTProcessor fftProcessor;
+     FFTProcessor fftProcessor{1024, 512}; // or whatever value
      SpectralFX spectralFX;
      PostFX postFX;
 

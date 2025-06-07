@@ -60,7 +60,7 @@ void Sound0maticProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
      sampleLoader.loadSampleFromFile(sampleFile, sampleRate);
      sampleLoader.setTrimRange(0.0f, 1.0f);
      playbackPosition = 0;
-     fftProcessor.prepare(sampleRate);
+     fftProcessor.prepare(1024, 512);
      // spectralFX.prepare(sampleRate, samplesPerBlock);
      // postFX.prepare(sampleRate, samplesPerBlock);
 }

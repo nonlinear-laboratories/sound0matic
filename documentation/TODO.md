@@ -4,7 +4,7 @@
 - [x] JUCE PluginProcessor + header stub
 - [x] VST3 plugin build verified
 - [x] SampleLoader loads .wav file
-- [ ] FFTProcessor applies real-time STFT
+- [x] FFTProcessor applies real-time STFT
 - [ ] STNModule computes & caches masks
 - [ ] PhaseVocoder maps MIDI to bin shifts
 - [ ] SpectralFX: freeze, smear, blur

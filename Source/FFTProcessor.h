@@ -1,25 +1,29 @@
 // FFTProcessor.h
-
 #pragma once
 #include <JuceHeader.h>
+#include <juce_dsp/juce_dsp.h>
 
 class FFTProcessor
 {
    public:
-     FFTProcessor();
+     FFTProcessor(int fftSize, int hopSize);
      void prepare(int fftSize, int hopSize);
-     void processBlock(juce::AudioBuffer<float> &input,
-                       juce::AudioBuffer<float> &output);
+     void pushSample(float sample);
+     bool readyToProcess() const;
+     void performSTFT();
+     void performISTFT();
+     float popSample();
+
+     juce::AudioBuffer<float> real, imag;
 
    private:
-     std::unique_ptr<juce::dsp::FFT> fft;
-     juce::AudioBuffer<float> fftInputBuffer;
-     juce::AudioBuffer<float> fftOutputBuffer;
-     juce::AudioBuffer<float> overlapAddBuffer;
-     std::vector<float> window;
-
      int fftSize = 0;
      int hopSize = 0;
-     int fftOrder = 0;
-     int writePosition = 0;
+     int inputIndex = 0;
+     int outputIndex = 0;
+
+     std::vector<float> inputBuffer, outputBuffer;
+
+     juce::dsp::FFT fft;
+     std::unique_ptr<juce::dsp::WindowingFunction<float>> window;
 };

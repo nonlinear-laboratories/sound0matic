@@ -21,14 +21,14 @@
 
 ## Build Instructions (Linux)
 
-```bash
+```
 sudo apt install build-essential cmake ninja-build libgtk-3-dev libasound2-dev
 cd ~/dev/sound0matic
 cmake -Bbuild -S. -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ```
 
-Resulting `.vst3` file is installed to `~/.vst3/` for testing in Carla.
+Resulting `.vst3` file is installed to `~/dev/playground/` for testing in Carla.
 
 ## Plugin Targets
 
@@ -41,7 +41,7 @@ Resulting `.vst3` file is installed to `~/.vst3/` for testing in Carla.
 - Extensions: CMake Tools, C/C++, Clang-Format, YAML
 
 
-\== Notes
+## Notes
 
 * Internal plugin ID: `nll.sound0matic`
 * Plugin codes: `V01D` (manufacturer), `S0M1` (product)

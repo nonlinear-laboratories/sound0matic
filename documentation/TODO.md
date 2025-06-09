@@ -6,7 +6,7 @@
 - [x] SampleLoader loads .wav file
 - [x] FFTProcessor applies real-time STFT
 - [x] STNModule computes & caches masks
-- [ ] PhaseVocoder maps MIDI to bin shifts
+- [x] PhaseVocoder maps MIDI to bin shifts
 - [ ] SpectralFX: freeze, smear, blur
 - [ ] PhaseFX: jitter, offset, lock
 - [ ] GUI: waveform view + controls

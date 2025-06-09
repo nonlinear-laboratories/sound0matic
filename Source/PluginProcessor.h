@@ -10,6 +10,8 @@
 #include "SpectralFX.h"
 #include <JuceHeader.h>
 
+#define JucePlugin_Name "sound0matic"
+
 class Sound0maticProcessor : public juce::AudioProcessor
 {
    public:
@@ -28,9 +30,9 @@ class Sound0maticProcessor : public juce::AudioProcessor
      bool hasEditor() const override;
 
      const juce::String getName() const override;
-     bool acceptsMidi() const override;
-     bool producesMidi() const override;
-     bool isMidiEffect() const override;
+     bool acceptsMidi() const override { return true; }
+     bool producesMidi() const override { return false; }
+     bool isMidiEffect() const override { return false; }
      double getTailLengthSeconds() const override;
 
      int getNumPrograms() override;
@@ -49,6 +51,10 @@ class Sound0maticProcessor : public juce::AudioProcessor
      FFTProcessor fftProcessor{1024, 512};
      STNModule stnModule;
      PhaseVocoder vocoder;
+     int currentMidiNote = 60;      // default to Middle C (C4)
+     int currentMidiVelocity = 127; // default to maximum velocity
+     int currentMidiChannel = 1;    // default to channel 1
+     void handleMidiPitch(int midiNote);
      SpectralFX spectralFX;
      PhaseFX phaseFX;
      PostFX postFX;

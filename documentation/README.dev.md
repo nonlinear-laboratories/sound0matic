@@ -1,4 +1,4 @@
-# Sound0matic Developer Overview
+# Sound0matic Development Overview
 
 ## Project Layout
 
@@ -17,65 +17,6 @@
 │   ├── .clang-format        # Code style guide
 │   └── .editorconfig        # Basic text editor rules
 ```
-
-## Build Instructions (Linux)
-
-```
-sudo apt install build-essential cmake ninja-build libgtk-3-dev libasound2-dev
-cd ~/dev/sound0matic
-cmake -Bbuild -S. -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-```
-
-Resulting `.vst3` file is installed to `~/dev/playground/` for testing in Carla.
-
-## Plugin Targets
-
-- Format: VST3 (MVP)
-- Future: Standalone (JACK/ALSA), LV2
-
-## Editor / IDE
-
-- OS: Linux x64 6.13.8-4-liquorix-amd64 
-- VSCodium 1.100.03093
-- Extensions: C/C++, Clang-Format, CMake Tools, Clang-Format, Markdown All-in-One, Mermaid Preview Support, PlantUML, YAML
-
-
-## Notes
-
- The plugin is called `sound0matic` internally, it is only referred to as **"The Sound-0-Matic mk1"** in documentation and UI.
-
-   Internal plugin ID: `nll.sound0matic`
-   Plugin codes: `V01D` (manufacturer), `S0M1` (product)
-   All `.dsp` files (if used) compiled via `faust -lang cpp`
-   Clang-Format Preferences
-- Language: Cpp 
-- BasedOnStyle: LLVM
-- IndentWidth: 5
-- TabWidth: 5
-- UseTab: Never
-- BreakBeforeBraces: Allman
-- AllowShortIfStatementsOnASingleLine: false
-- AllowShortBlocksOnASingleLine: false
-- AlwaysBreakTemplateDeclarations: Yes
-- ReflowComments:  true
-- PointerAlignment: Right
-- IdentifierNaming:
-   - FunctionCase: lower_case
-   - VariableCase: lower_case
-   - ClassCase: CamelCase
-   - StructCase: CamelCase
-   - EnumCase: CamelCase
-   - EnumConstantCase: UPPER_CASE
-   - MemberCase: lower_case
-   - PrivateMemberPrefix: "_"
-   - ConstantCase: UPPER_CASE
-   - GlobalConstantCase: UPPER_CASE
-- IncludeCategories:
-   - Regex: '^"(juce|faust)/'
-       Priority: 1
-   - Regex: '.*'
-       Priority: 2*
 
 ## What We've Got so far
 * **Core pipeline**: SampleLoader → FFTProcessor → PhaseVocoder → SpectralFX → PhaseFX → ISTFT → PostFX
@@ -112,4 +53,85 @@ Resulting `.vst3` file is installed to `~/dev/playground/` for testing in Carla.
 3. **Add a simple UI so you can tweak things in realtime**.
 4. **Then move on to refining SpectralFX and PhaseFX components**.
 5. **Finally stabilize the host loading and plugin metadata**.
+
 ---
+
+## Build Instructions (Linux)
+
+```
+sudo apt install build-essential cmake ninja-build libgtk-3-dev libasound2-dev
+cd ~/dev/sound0matic
+cmake -Bbuild -S. -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+```
+
+Resulting `.vst3` file is installed to `~/dev/playground/` for testing in Carla.
+
+## Plugin Targets
+
+- Format: VST3 (MVP)
+- Future: Standalone (JACK/ALSA), LV2
+
+## Editor / IDE
+
+- OS: Linux x64 6.13.8-4-liquorix-amd64 
+- VSCodium 1.100.03093
+- Extensions: C/C++, Clang-Format, CMake Tools, Clang-Format, Markdown All-in-One, Mermaid Preview Support, PlantUML,
+
+## Dependencies
+
+```cmake
+# Add CImg library (header-only)
+find_path(CIMG_INCLUDE_DIR CImg.h PATHS /usr/include /usr/local/include)
+target_include_directories(sound0matic PRIVATE ${CIMG_INCLUDE_DIR})
+
+# CImg optional dependencies for advanced features
+find_package(JPEG QUIET)
+find_package(PNG QUIET)
+if(JPEG_FOUND AND PNG_FOUND)
+    target_link_libraries(sound0matic PRIVATE ${JPEG_LIBRARIES} ${PNG_LIBRARIES})
+    target_compile_definitions(sound0matic PRIVATE cimg_use_jpeg cimg_use_png)
+endif()
+```
+
+### Notes
+
+ The plugin is called `sound0matic` internally, it is only referred to as **"The Sound-0-Matic mk1"** in documentation and UI.
+
+Internal plugin ID: `nll.sound0matic`  
+Manufacturer ID: `V01D`  
+Product ID: `S0M1`  
+Version Number: (e.g. 0.0.1)  
+Category/Type: (vst3, lv2, standalone)  
+
+All `.dsp` files (if used) compiled via `faust -lang cpp`
+
+### Clang-Format Preferences
+
+Language: Cpp  
+BasedOnStyle: LLVM  
+IndentWidth: 5  
+TabWidth: 5  
+UseTab: Never  
+BreakBeforeBraces: Allman  
+AllowShortIfStatementsOnASingleLine: false  
+AllowShortBlocksOnASingleLine: false  
+AlwaysBreakTemplateDeclarations: Yes  
+ReflowComments:  true  
+PointerAlignment: Right  
+IdentifierNaming:  
+   FunctionCase: lower_case  
+   VariableCase: lower_case  
+   ClassCase: CamelCase  
+   StructCase: CamelCase  
+   EnumCase: CamelCase  
+   EnumConstantCase: UPPER_CASE  
+   MemberCase: lower_case  
+   PrivateMemberPrefix: "_"  
+   ConstantCase: UPPER_CASE  
+   GlobalConstantCase: UPPER_CASE  
+IncludeCategories:  
+   Regex: '^"(juce|faust)/'  
+       Priority: 1  
+   Regex: '.*'  
+       Priority: 2*  

@@ -19,18 +19,13 @@ const juce::String Sound0maticProcessor::getName() const
      return "sound0matic";
 }
 
-bool Sound0maticProcessor::acceptsMidi() const
+void Sound0maticProcessor::handleMidiPitch(int midiNote)
 {
-     return false;
+     currentMidiNote = midiNote;
+     float semitoneRatio = std::pow(2.0f, (midiNote - 60) / 12.0f);
+     vocoder.setPitchShiftRatio(semitoneRatio);
 }
-bool Sound0maticProcessor::producesMidi() const
-{
-     return false;
-}
-bool Sound0maticProcessor::isMidiEffect() const
-{
-     return false;
-}
+
 double Sound0maticProcessor::getTailLengthSeconds() const
 {
      return 0.0;
@@ -77,7 +72,7 @@ bool Sound0maticProcessor::isBusesLayoutSupported(const BusesLayout &layouts) co
 }
 
 void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
-                                        juce::MidiBuffer &)
+                                        juce::MidiBuffer &midiMessages)
 {
      float pitch = *parameters.getRawParameterValue("pitchShift");
      float stretch = *parameters.getRawParameterValue("timeStretch");
@@ -85,6 +80,15 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
      bool bypassPhase = parameters.getRawParameterValue("bypassPhase")->load();
      // Apply parameters
      vocoder.setPitchShiftRatio(pitch);
+     for (const auto metadata : midiMessages)
+     {
+          const auto msg = metadata.getMessage();
+          if (msg.isNoteOn())
+          {
+               handleMidiPitch(msg.getNoteNumber());
+          }
+     }
+
      vocoder.setTimeStretchRatio(stretch);
      spectralFX.setBypass(bypassSpectral);
      phaseFX.setBypass(bypassPhase);

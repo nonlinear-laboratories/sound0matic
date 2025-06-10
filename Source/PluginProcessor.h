@@ -13,7 +13,8 @@
 
 #define JucePlugin_Name "sound0matic"
 
-class Sound0maticProcessor : public juce::AudioProcessor
+class Sound0maticProcessor : public juce::AudioProcessor,
+                             private juce::AudioProcessorValueTreeState::Listener
 {
    public:
      Sound0maticProcessor();
@@ -59,6 +60,16 @@ class Sound0maticProcessor : public juce::AudioProcessor
      SpectralFX spectralFX;
      PhaseFX phaseFX;
      PostFX postFX;
+
+     void parameterChanged(const juce::String &id, float newValue) override
+     {
+          if (id == "sinGain")
+               stnModule.setSinusoidGain(newValue);
+          else if (id == "transGain")
+               stnModule.setTransientGain(newValue);
+          else if (id == "resGain")
+               stnModule.setResidualGain(newValue);
+     }
 
      JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sound0maticProcessor)
 };

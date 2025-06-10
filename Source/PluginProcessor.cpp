@@ -74,16 +74,6 @@ void Sound0maticProcessor::releaseResources()
 {
 }
 
-void Sound0maticProcessor::parameterChanged(const juce::String &paramID, float newValue)
-{
-     if (id == "sinGain")
-          stnModule.setSinusoidGain(newValue);
-     else if (id == "transGain")
-          stnModule.setTransientGain(newValue);
-     else if (id == "resGain")
-          stnModule.setResidualGain(newValue);
-}
-
 bool Sound0maticProcessor::isBusesLayoutSupported(const BusesLayout &layouts) const
 {
      return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();

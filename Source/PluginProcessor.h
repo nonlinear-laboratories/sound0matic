@@ -44,7 +44,15 @@ class Sound0maticProcessor : public juce::AudioProcessor,
 
      void getStateInformation(juce::MemoryBlock &destData) override;
      void setStateInformation(const void *data, int sizeInBytes) override;
-     void parameterChanged(const juce::String &parameterID, float newValue) override;
+     void parameterChanged(const juce::String &id, float newValue) override
+     {
+          if (id == "sinGain")
+               stnModule.setSinusoidGain(newValue);
+          else if (id == "transGain")
+               stnModule.setTransientGain(newValue);
+          else if (id == "resGain")
+               stnModule.setResidualGain(newValue);
+     }
 
    private:
      SampleLoader sampleLoader;

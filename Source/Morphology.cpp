@@ -78,3 +78,5 @@ void Morphology::extractComponents(const juce::AudioBuffer<float> &magnitude,
 
 void convertToBuffer(const cimg_library::CImg<float> &img,
                      juce::AudioBuffer<float> &buffer, float gain)
+{
+}

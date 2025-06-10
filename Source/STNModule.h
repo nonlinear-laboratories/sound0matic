@@ -6,32 +6,28 @@ class STNModule
 {
    public:
      STNModule();
-
      void analyze(const juce::AudioBuffer<float> &magnitude);
-     const juce::AudioBuffer<float> &getSinusoidMask() const;
-     const juce::AudioBuffer<float> &getTransientMask() const;
-     const juce::AudioBuffer<float> &getResidualMask() const;
-
-     void setSinusoidGain(float gain);
-     void setTransientGain(float gain);
-     void setResidualGain(float gain);
-
-     bool recombineNeeded = true;
-     float lastSinGain = -1.0f;
-     float lastTransGain = -1.0f;
-     float lastResGain = -1.0f;
-
      void recombineMaskedBuffers(juce::AudioBuffer<float> &real,
                                  juce::AudioBuffer<float> &imag);
 
-   private:
-     juce::AudioBuffer<float> sinusoidMask;
-     juce::AudioBuffer<float> transientMask;
-     juce::AudioBuffer<float> residualMask;
-     float sinusoidGain = 1.0f;
-     float transientGain = 1.0f;
-     float residualGain = 1.0f;
+     const juce::AudioBuffer<float> &getSinusoidMask() const noexcept
+     {
+          return sinusoidMask;
+     }
+     const juce::AudioBuffer<float> &getTransientMask() const noexcept
+     {
+          return transientMask;
+     }
+     const juce::AudioBuffer<float> &getResidualMask() const noexcept
+     {
+          return residualMask;
+     }
 
-     void convertToBuffer(const cimg_library::CImg<float> &img,
-                          juce::AudioBuffer<float> &buffer, float gain);
+     void setSinusoidGain(float gain) noexcept { sinusoidGain = gain; }
+     void setTransientGain(float gain) noexcept { transientGain = gain; }
+     void setResidualGain(float gain) noexcept { residualGain = gain; }
+
+   private:
+     juce::AudioBuffer<float> sinusoidMask, transientMask, residualMask;
+     float sinusoidGain = 1.0f, transientGain = 1.0f, residualGain = 1.0f;
 };

@@ -3,11 +3,16 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#define JUCE_DEBUG 1
+
 Sound0maticProcessor::Sound0maticProcessor()
     : AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+     // ...Debugging
+     DBG("Sound0maticProcessor::constructor");
+
      // Register parameter listeners
      parameters.addParameterListener("sinGain", this);
      parameters.addParameterListener("transGain", this);
@@ -57,14 +62,26 @@ const juce::String Sound0maticProcessor::getProgramName(int)
 void Sound0maticProcessor::changeProgramName(int, const juce::String &)
 {
 }
-
 void Sound0maticProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+
+     // ...Debugging
+     DBG("Sound0maticProcessor::prepareToPlay()");
+     DBG("prepareToPlay: sampleRate = " << sampleRate
+                                        << ", samples = " << samplesPerBlock);
+
      juce::File sampleFile("/home/null/dev/sound0matic/Resource/cymbalom-a3.wav");
+     // ...Debugging
+     DBG("sampleLoader loaded");
+
      sampleLoader.loadSampleFromFile(sampleFile, sampleRate);
      sampleLoader.setTrimRange(0.0f, 1.0f);
      playbackPosition = 0;
+
+     // ...Debugging
+     DBG("fftProcessor ready");
      fftProcessor.prepare(1024, 512);
+
      vocoder.prepare(sampleRate, 1024, 512);
      phaseFX.prepare(sampleRate, samplesPerBlock);
      postFX.prepare(sampleRate, samplesPerBlock);
@@ -83,6 +100,12 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                         juce::MidiBuffer &midiMessages)
 {
 
+     // ...Debugging
+     DBG("processBlock: start");
+     DBG("processBlock size: " << buffer.getNumSamples());
+     DBG("playbackPosition: " << playbackPosition);
+
+     // Get parameters
      float pitch = *parameters.getRawParameterValue("pitchShift");
      float stretch = *parameters.getRawParameterValue("timeStretch");
      bool bypassSpectral = parameters.getRawParameterValue("bypassSpectral")->load();
@@ -111,13 +134,23 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
           float sample = 0.0f;
           if (playbackPosition < availableSamples)
                sample = source.getReadPointer(0)[playbackPosition++];
+
+          // ...Debugging
+          DBG("Before fftProcessor.pushSample()");
           fftProcessor.pushSample(sample);
+          DBG("After fftProcessor.pushSample()");
+
           if (fftProcessor.readyToProcess())
           {
+               DBG("Ready to process FFT");
                fftProcessor.performSTFT();
+               DBG("Performed STFT"); //...Debugging
 
                // --- STN Analysis (Mask-based Routing Logic) ---
                juce::AudioBuffer<float> magnitude;
+
+               // ...Debugging
+               DBG("STN analysis...");
                magnitude.setSize(fftProcessor.real.getNumChannels(),
                                  fftProcessor.real.getNumSamples());
                for (int ch = 0; ch < magnitude.getNumChannels(); ++ch)
@@ -140,6 +173,7 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                stnModule.setResidualGain(resGain);
 
                // --- STN Analysis (Mask-based Routing Logic) ---
+               DBG("Analyzing STN"); //...Debugging
                stnModule.analyze(magnitude);
                auto &sMask = stnModule.getSinusoidMask();
                auto &tMask = stnModule.getTransientMask();
@@ -149,12 +183,14 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                stnModule.recombineMaskedBuffers(fftProcessor.real, fftProcessor.imag);
 
                // --- Vocoder ---
+               DBG("Before vocoder"); //...Debugging
                vocoder.process(fftProcessor.real, fftProcessor.imag);
-
+               DBG("After vocoder");
                // --- FX Chain ---
                spectralFX.processBins(fftProcessor.real, fftProcessor.imag);
                phaseFX.process(fftProcessor.real, fftProcessor.imag);
                fftProcessor.performISTFT();
+               DBG("Performed ISTFT"); //...Debugging
           }
 
           float outSample = fftProcessor.popSample();

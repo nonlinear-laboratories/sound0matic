@@ -12,7 +12,8 @@
 
 #define JucePlugin_Name "sound0matic"
 
-class Sound0maticProcessor : public juce::AudioProcessor
+class Sound0maticProcessor : public juce::AudioProcessor,
+                             public juce::AudioProcessorValueTreeState::Listener
 {
    public:
      Sound0maticProcessor();
@@ -43,6 +44,7 @@ class Sound0maticProcessor : public juce::AudioProcessor
 
      void getStateInformation(juce::MemoryBlock &destData) override;
      void setStateInformation(const void *data, int sizeInBytes) override;
+     void parameterChanged(const juce::String &parameterID, float newValue) override;
 
    private:
      SampleLoader sampleLoader;

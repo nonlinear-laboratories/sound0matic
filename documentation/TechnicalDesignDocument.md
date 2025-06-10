@@ -1,24 +1,36 @@
 # **The Sound-0-Matic mk1 Technical Design Document**
 
----
-
 ### 🚧 **(Work in Progress)** 🚧
 
 ---
 
 ## Table of Contents
-
- ...tbd
-
+- [**The Sound-0-Matic mk1 Technical Design Document**](#the-sound-0-matic-mk1-technical-design-document)
+    - [🚧 **(Work in Progress)** 🚧](#-work-in-progress-)
+  - [Table of Contents](#table-of-contents)
+  - [0. Introduction](#0-introduction)
+    - [0.1. Open Source Philosophy \& Licensing Strategy](#01-open-source-philosophy--licensing-strategy)
+    - [0.2. Project Scope](#02-project-scope)
+  - [1. System Architecture Overview](#1-system-architecture-overview)
+    - [1.1. JUCE, Faust, and C++ Integration](#11-juce-faust-and-c-integration)
+    - [1.2. Threading Model, Memory, and Real-Time Safety](#12-threading-model-memory-and-real-time-safety)
+    - [1.3. Latency Analysis (J.Smith's SASP Ch. 8)](#13-latency-analysis-jsmiths-sasp-ch-8)
+    - [1.4. Memory Layout for SIMD Efficiency](#14-memory-layout-for-simd-efficiency)
+    - [1.5. Signal Flow (ASCII Diagram)](#15-signal-flow-ascii-diagram)
+  - [2. DETAILED DSP THEORY \& ALGORITHMS](#2-detailed-dsp-theory--algorithms)
+    - [2.1. FFT, STFT, and IFFT (with COLA, overlap-add, zero-padding)](#21-fft-stft-and-ifft-with-cola-overlap-add-zero-padding)
+    - [2.2. STN Decomposition via Morphological Filtering for Spectrogram Shape Analysis](#22-stn-decomposition-via-morphological-filtering-for-spectrogram-shape-analysis)
+    - [2.3. Phase Vocoder Mechanics](#23-phase-vocoder-mechanics)
+    - [2.4. Spectral/Phase Manipulation Effects](#24-spectralphase-manipulation-effects)
 ---
 
-## Introduction
+## 0. Introduction
 
 The **Sound-0-Matic mk1** is a monophonic, performance-oriented spectral sampler synthesizer developed by nonlinear laboratories. In the Sound-0-Matic, incoming audio is analyzed via a Short-Time Fourier Transform (STFT) and split into sinusoidal (tonal), transient (attack), and noise (residual) components. Then, phase-vocoder methods and spectral modeling provide the theoretical foundation: for instance, FFT-based vocoders enabled speech coding and musical time/pitch modification as early as the 1970s.  The Sound-0-Matic builds on these insights but targets live performance: low latency processing is critical.  The core analysis and resynthesis engine is implemented in highly optimized C++ (using FFT libraries like FFTW or KISS) within the JUCE framework.  The plugin optionally embeds Faust-generated DSP code for some filters or effects modules.  The user interface is styled with a retro analog aesthetic (knobs, switches, VU meters) while providing modern conveniences like MIDI-learnable parameters and real-time waveform/spectrum displays.
 
 In summary, the Sound-0-Matic offers a research-grade (but performer ready) spectral sampler synthesizer that can freeze sounds, blur and smear spectra, apply creative phase-domain transformations, and otherwise reshape sound in musically useful ways.  Its intended users are DSP-savvy audio programmers, plugin developers, and experimental sound designers who appreciate detailed control over spectral content.
 
-### Open Source Philosophy & Licensing Strategy
+### 0.1. Open Source Philosophy & Licensing Strategy
 
 The Sound-0-Matic is committed to remaining 100% open source throughout its lifecycle. All code, documentation, and associated materials will be released under GPLv3 or compatible licenses.
 
@@ -28,7 +40,7 @@ The Sound-0-Matic is committed to remaining 100% open source throughout its life
 - **Build System**: MIT-licensed CMake scripts where possible
 - **NO PROPRIETARY DEPENDENCIES**: Reject any closed-source libraries, even if performance benefits exist
 
-### Project Scope
+### 0.2. Project Scope
 
 This document details the technical design of the Sound-O-Matic plugin, broken into logical components.  The project scope includes:
 
@@ -66,9 +78,9 @@ Each of these goals will be expanded in the following sections: architecture ove
 
 ---
 
-## System Architecture Overview
+## 1. System Architecture Overview
 
-### JUCE, Faust, and C++ Integration
+### 1.1. JUCE, Faust, and C++ Integration
 
 The sound0matic is built as a standard JUCE audio plugin (e.g. VST3) in C++.  The JUCE **AudioProcessor** class implements the real-time audio callback.  Faust (if used) provides DSP blocks: Faust “.dsp” source files are compiled into C++ using `faust2api`. For example, running:
 
@@ -80,7 +92,7 @@ produces a C++ class implementing an audio callback.  More conveniently, `faust2
 
 Internally, the JUCE processor will hold member instances for each DSP component: FFT buffers, window function, a “sine bank” object for partial synthesis, and any Faust DSP classes.  The audio callback (`processBlock`) reads from an input circular buffer, processes through the STFT pipeline, and writes to the output buffer.  Custom C++ classes handle STN separation, transient detection, and effect algorithms.  Faust-generated classes are used for embarrassingly parallel or sample-based tasks (e.g. a one-pole filter, LFO, simple waveshaper) which Faust can express concisely.
 
-### Threading Model, Memory, and Real-Time Safety
+### 1.2. Threading Model, Memory, and Real-Time Safety
 
 JUCE distinguishes the real-time audio thread (processing audio) from the GUI thread.  The AudioProcessor’s `processBlock()` runs in the audio thread and must be non-blocking.  All heavy DSP (windowing, FFT, ISTFT, STN analysis, etc.) occurs here.  No heap allocations, locks, or I/O are allowed on this thread.  Memory (arrays for window coefficients, FFT workspace, circular ring buffers) is pre-allocated in initialization, avoiding any `new` or `malloc` during processing.  For example, use `std::vector<float>` or raw arrays sized to fixed maximum block size (e.g. 4096 samples) for audio buffers.  The FFT plan (if using FFTW, etc.) can be created ahead of time (FFT “wisdom” loaded) to avoid on-the-fly planning overhead.
 
@@ -90,7 +102,35 @@ Special care is taken in the overlap-add mechanism: an output double-buffer of l
 
 Faust DSP objects are thread-safe by design (they only do float operations).  We call a Faust `instance->compute(numSamples, inputs, outputs)` each block.  If multiple Faust instances are used, they can be updated from the audio thread as well.  The Faust parameters are updated via `setParamValue(path, value)`, which typically acquires an internal lock; however, updating parameters outside the audio thread or batching updates per block avoids audio glitches.
 
-### Signal Flow (ASCII Diagram)
+### 1.3. Latency Analysis (J.Smith's SASP Ch. 8)
+```
+Frame Size (M) | Zero-pad (N) | Hop (R) | Latency | Freq Res | Use Case
+512            | 1024         | 256     | 5.8ms   | 43.1Hz   | Low-latency live
+1024           | 2048         | 512     | 11.6ms  | 21.5Hz   | Balanced
+2048           | 4096         | 1024    | 23.2ms  | 10.8Hz   | High precision
+```
+**Adaptive Windowing**: Implement dynamic window sizing based on transient content:
+* Transient frames: Short window (512 samples)
+* Steady-state: Long window (2048 samples)
+* Crossfade between modes to avoid artifacts
+
+### 1.4. Memory Layout for SIMD Efficiency
+```cpp
+// 32-byte aligned buffers for AVX operations
+struct alignas(32) FFTWorkspace {
+    float* analysis_window;     // M samples, 32-byte aligned
+    float* fft_input;          // N samples, complex interleaved
+    float* fft_output;         // N samples, complex interleaved
+    float* overlap_buffer;     // N+R samples for OLA
+};
+
+// Pre-allocate all buffers in constructor
+void initializeBuffers() {
+    analysis_window = (float*)aligned_alloc(32, M * sizeof(float));
+    // ... etc, with proper cleanup in destructor
+}
+```
+### 1.5. Signal Flow (ASCII Diagram)
 
 // work in progress...
 
@@ -115,17 +155,12 @@ graph TD
     I --> J[Output Signal]
 ```
 
-* The **FFT Analysis Window** block slides a window (size *M*, hop *R*) over the input, zero-pads to *N*, and computes an *N*-point FFT.
-* The spectrum `X_m[k]` is then split into components: sinusoidal peaks (fed into the Sinusoidal Extraction branch), the transient indicator path (to decide if a transient override is needed), and residual noise (fed into the Noise Filter bank).
-* Each branch can apply its own processing (e.g. pitch-shifting to sines, bypass or shorter-windo﻿w to transients, filtering to noise).
-* The outputs of all branches are combined spectrally into `Y_m[k]`, then an inverse FFT and overlap-add reconstruct the time-domain output.
-
 This modular flow ensures clarity: for example, turning off the freeze effect is simply “pass-through” in the spectral domain.  The asynchronous GUI thread visualizes the **Audio In** waveform and the **Audio Out** waveform (or spectrogram) by reading from a thread-safe FIFO that mirrors the audio buffer.
 
 
-## DETAILED DSP THEORY & ALGORITHMS
+## 2. DETAILED DSP THEORY & ALGORITHMS
 
-### FFT, STFT, and IFFT (with COLA, overlap-add, zero-padding)
+### 2.1. FFT, STFT, and IFFT (with COLA, overlap-add, zero-padding)
 
 The core spectral processing is built on the Short-Time Fourier Transform (STFT) and inverse STFT.  In practice, the audio stream is split into overlapping frames of length *M* samples.  Each frame is multiplied by a window function *w\[n]* of length *M*.  We choose a window with the **Constant OverLap-Add (COLA)** property; such as Hamming window with 50% overlap - The Hamming window (α=0.54, β=0.46) provides excellent COLA properties with 50% overlap and superior side-lobe suppression compared to rectangular windows.
 
@@ -162,7 +197,7 @@ for each frame m:
 
 If `X` is unmodified, `addSamples` with a COLA window will yield exact reconstruction.  For large *N*, this incurs latency of `(N/2)/Fs` seconds (half the IFFT window, assuming zero-phase), but provides finer frequency resolution.  Choice of *M*, *R*, and *N* is a trade-off (longer windows give better freq. precision but more latency and smearing in time).
 
-### STN Decomposition via Morphological Filtering for Spectrogram Shape Analysis
+### 2.2. STN Decomposition via Morphological Filtering for Spectrogram Shape Analysis
 
 The plugin implements a sinusoidal–transient–noise (STN) model on top of the STFT. Since JUCE itself doesn't have a built-in image processing library for advanced morphological operations, we treat the spectrogram as a 2D image and use a dedicated C++ image processing library. So heres my general thought on the workflow:
 
@@ -226,24 +261,7 @@ public:
         
         // --- Morphological Operations ---
         
-        // Option A: Using OpenCV (requires linking OpenCV)
-        // cv::Mat spectrogramMat(num_time_frames, num_freq_bins, CV_32F, spectrogramMagnitudeData[0]); // Create OpenCV Mat from your data
-        // cv::Mat sinusoidalComponent, transientComponent, noiseComponent;
-        
-        // Define structuring elements
-        // cv::Mat horizontalKernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(kernel_width, 1));
-        // cv::Mat verticalKernel   = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(1, kernel_height));
-        
-        // Extract Sinusoidal (Opening with horizontal kernel)
-        // cv::morphologyEx(spectrogramMat, sinusoidalComponent, cv::MORPH_OPEN, horizontalKernel);
-        
-        // Extract Transient (Opening with vertical kernel)
-        // cv::morphologyEx(spectrogramMat, transientComponent, cv::MORPH_OPEN, verticalKernel);
-        
-        // Extract Noise (as residual)
-        // cv::subtract(spectrogramMat, sinusoidalComponent + transientComponent, noiseComponent);
-        
-        // Option B: Using CImg (simpler integration)
+        // Using CImg
         // CImg<float> spectrogramCImg(num_time_frames, num_freq_bins, 1, 1);
         // Copy spectrogramMagnitudeData to spectrogramCImg
         
@@ -266,12 +284,11 @@ public:
     // ... other DSP functions
 };
 ```
-
 This approach is powerful because it leverages the "image" nature of the spectrogram to perform sophisticated spatial filtering, allowing for a more robust separation of components based on their visual characteristics. Since real-time isn't a strict requirement, we can afford the potentially higher computational cost compared to simpler real-time methods.
 
-### Phase Vocoder Mechanics (Phase Delta, Unwrapping, Pitch/Time Mapping)
+### 2.3. Phase Vocoder Mechanics 
 
-## Phase Vocoder Mechanics (Phase Delta, Unwrapping, Pitch/Time Mapping)
+**Phase Delta, Unwrapping, Pitch/Time Mapping Basics**
 
 Classic phase-vocoder time-stretching and pitch-shifting are used to manipulate playback timing and pitch.  Using the tracked sinusoids (with amplitude A and phase Φ), the instantaneous frequency ω can be computed.  Concretely, between frame *m-1* and *m*, the true phase advance is:
 
@@ -289,7 +306,7 @@ Y_m[k] = A_m * exp(j Φ'_m)
 
 Thus if *R'>R* (stretch), phase increments slower, yielding a longer sound.  If *R'\<R*, the sound is compressed.  For pitch shift without time-stretch, one can set *R'=R* but remap frequencies by resampling the spectral envelope (shifting magnitudes to new bins and computing corresponding phases).  In all cases, proper handling of phase wrapping is essential to avoid “phasiness”.
 
-**Pseudocode (for each bin k):**
+Pseudocode (for each bin k):
 
 ```
 phi = angle(X_m[k])
@@ -305,45 +322,52 @@ Y_m[k] = mag(X_m[k]) * exp(j * phi_synth[k])
 
 The plugin performs this for each spectral bin (or at least for each sinusoidal peak).  Using an FFT vocoder (with unwrapped phase) allows smooth interpolation and exact reconstruction.
 
-### Time-Stretching
+**Time-Stretching**
 
-$$
-\phi_{m,k} = \phi_{m-1,k} + \Delta\phi_{m,k}
-$$
+Time-stretching is achieved by modifying the hop size ($S$) used in phase accumulation, effectively slowing down or speeding up the progression of phase.
 
-$$
-\Delta\phi_{m,k} = \omega_k T_a + \text{principal}(\phi_{m,k} - \phi_{m-1,k} - \omega_k T_s)
-$$
+$\phi_{m,k} = \phi_{m-1,k} + \Delta\phi_{m,k}$
 
-### Pitch-Shifting (via resampling post-stretch)
+Where: $\Delta\phi_{m,k} = \omega_k T_a + \text{principal}(\phi_{m,k} - \phi_{m-1,k} - \omega_k T_s)$
+($T_a$ and $T_s$ are analysis and synthesis hop times, respectively).
 
-$$
-X'(\omega) = X(\omega / \alpha)
-$$
+**Non-linear Time-Stretching (Advanced)**
 
-```mermaid
-graph TD
-    Frame1 -->|\phi_{m,k}| Phase[Phase Derivative]
-    Phase --> Interp[Phase Interpolation]
-    Interp --> iFFT[ISTFT]
-    iFFT --> Output[Stretched or Shifted Signal]
-```
+Non-linear time-stretching, such as using a phase-locked vocoder, aims to improve onset preservation and reduce artifacts by ensuring phase coherence is maintained across related partials, often by identifying and linking "parent" sinusoids to their harmonics.
 
-### Optional: Cepstrum and LPC
+This involves:
+-   **Partial Tracking:** Identifying and linking sinusoidal components across frames.
+-   **Phase Locking:** Ensuring that the phases of harmonics remain consistent with their fundamental frequency, even during stretching. This helps prevent "flanging" or "chorusing" artifacts.
+-   **Onset Preservation:** Special handling of transient (onset) events to prevent smearing during stretching. This often involves dynamic hop sizes or transient-specific processing.
 
-**Real Cepstrum:**
+**Pitch-Shifting (via resampling post-stretch)**
 
-$$
-\hat{x}(n) = \mathcal{F}^{-1} [\log(|X(\omega)|)]
-$$
+Pitch-shifting can be achieved by resampling the time-stretched signal or by manipulating the frequency bins directly.
 
-**LPC (Linear Predictive Coding):**
+$X'(\omega) = X(\omega / \alpha)$ (where $\alpha$ is the pitch shift factor)
 
-Prediction:
-$$
-\hat{x}[n] = -\sum_{k=1}^{p} a_k x[n-k]
-$$
+**Magnitude-Phase Resynthesis (Advanced)**
 
+Manipulated magnitude $|X(k, m)|$ is combined with updated phase $\phi(k, m)$ to reconstruct the signal in the frequency domain.
 
+$Y(k, m) = |X(k, m)| * e^{j\phi(k, m)}$
+
+**Real Cepstrum (Advanced):** $hat{x}(n) = \mathcal{F}^{-1} [\log(|X(\omega)|)]$
+
+**Linear Predictive Coding (Advanced):** $hat{x}[n] = -\sum_{k=1}^{p} a_k x[n-k]$
+
+### 2.4. Spectral/Phase Manipulation Effects
+
+With the STFT calculated, various effects are applied per-frame:
+
+* **Spectral Freeze:** Repeatedly re-use a single STFT frame.  Practically, when freeze is engaged we stop advancing `m` and continuously IFFT the same `X_m`.  This yields a frozen harmonic chord or drone from the last analyzed frame.
+* **Spectral Blur:** Smooth the magnitude spectrum.  For example, convolve |X\[k]| with a small Gaussian kernel in `k`, or average neighboring bins.  This diffuses spectral peaks, softening the timbre.  Alternatively, add random phase noise to each bin (while preserving magnitudes) to achieve a blurring of phase coherence.
+* **Spectral Smear:** Spread energy over time.  One method is to mix each new spectrum with previous ones: maintain a short history buffer of past |X| and blend them.  This is equivalent to a time-domain convolution that is executed in the spectral domain.  The result is a reverb-like “fading tail” effect on spectral features.
+* **Phase Distortions:** Modify phases across the spectrum to create time shifts or stutters.  For instance, apply a linear phase ramp (ϕ → ϕ + c·k) to impose a time delay.  Or apply a nonlinear phase function to distort waveform shape (all-pass filtering in frequency domain).
+* **Frequency Shifting / Inversion:** Shift the entire spectrum up/down in frequency by re-indexing magnitudes.  For example, spectral inversion (flipping bins `k -> N-k`) creates a unique effect.  After any rearrangement, compute phases accordingly (often by simply copying or negating original phases).
+* **Spectral Filters:** Time-varying filters are applied by multiplying `X_m[k]` by a response `H[k,m]`.  For example, one can implement a formant shift by emphasizing certain bands.  This can be done efficiently by directly modifying FFT bins (since `H` is diagonal in the spectral basis).
+* **Stereo Texture Algorithms:** Separate STFTs for left and right are computed.  We can then manipulate their relative phases to create spatial effects.  For instance, exchange or invert the sign of some bins between channels, or apply a decorrelation matrix.  A common trick is mid/side processing: let `M[k]=L[k]+R[k]`, `S[k]=L[k]-R[k]`.  Apply a phase effect to `S[k]` (like a slow oscillation), then recombine.  Human ears interpret inter-channel phase shifts as movement in the stereo field.
+
+In all cases, after applying the desired spectral effect, the modified frames are fed to the inverse STFT (IFFT + overlap-add) as usual.  Because the STFT is invertible (with the COLA window) and we preserve consistency, artifacts are minimized.
 
 

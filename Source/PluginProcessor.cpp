@@ -66,15 +66,15 @@ void Sound0maticProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
 
      // ...Debugging
-     DBG("Sound0maticProcessor::prepareToPlay()");
-     DBG("prepareToPlay: sampleRate = " << sampleRate
-                                        << ", samples = " << samplesPerBlock);
+     DBG("prepareToPlay: entered");
 
      juce::File sampleFile("/home/null/dev/sound0matic/Resource/cymbalom-a3.wav");
      // ...Debugging
-     DBG("sampleLoader loaded");
+     DBG("sampleLoader loading file");
 
      sampleLoader.loadSampleFromFile(sampleFile, sampleRate);
+     //...Debugging
+     DBG("sampleLoader file loaded");
      sampleLoader.setTrimRange(0.0f, 1.0f);
      playbackPosition = 0;
 
@@ -85,6 +85,8 @@ void Sound0maticProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
      vocoder.prepare(sampleRate, 1024, 512);
      phaseFX.prepare(sampleRate, samplesPerBlock);
      postFX.prepare(sampleRate, samplesPerBlock);
+     //...Debugging
+     DBG("prepareToPlay: entered");
 }
 
 void Sound0maticProcessor::releaseResources()

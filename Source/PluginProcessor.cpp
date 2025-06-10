@@ -8,6 +8,18 @@ Sound0maticProcessor::Sound0maticProcessor()
           "Output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+<<<<<<< Updated upstream
+=======
+
+     // Register parameter listeners
+     parameters.addParameterListener("sinGain", this);
+     parameters.addParameterListener("transGain", this);
+     parameters.addParameterListener("resGain", this);
+     parameters.addParameterListener("pitchShift", this);
+     parameters.addParameterListener("timeStretch", this);
+     parameters.addParameterListener("bypassSpectral", this);
+     parameters.addParameterListener("bypassPhase", this);
+>>>>>>> Stashed changes
 }
 
 Sound0maticProcessor::~Sound0maticProcessor()
@@ -74,6 +86,10 @@ bool Sound0maticProcessor::isBusesLayoutSupported(const BusesLayout &layouts) co
 void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                         juce::MidiBuffer &midiMessages)
 {
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
      float pitch = *parameters.getRawParameterValue("pitchShift");
      float stretch = *parameters.getRawParameterValue("timeStretch");
      bool bypassSpectral = parameters.getRawParameterValue("bypassSpectral")->load();

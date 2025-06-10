@@ -21,6 +21,7 @@ class Morphology
                                    juce::AudioBuffer<float> &residual);
 
    private:
+     static void spectralWhitening(cimg_library::CImg<float> &spectrogram);
      static void convertToBuffer(const cimg_library::CImg<float> &img,
                                  juce::AudioBuffer<float> &buffer);
 };

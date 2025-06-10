@@ -8,9 +8,6 @@ Sound0maticProcessor::Sound0maticProcessor()
           "Output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-<<<<<<< Updated upstream
-=======
-
      // Register parameter listeners
      parameters.addParameterListener("sinGain", this);
      parameters.addParameterListener("transGain", this);
@@ -19,7 +16,6 @@ Sound0maticProcessor::Sound0maticProcessor()
      parameters.addParameterListener("timeStretch", this);
      parameters.addParameterListener("bypassSpectral", this);
      parameters.addParameterListener("bypassPhase", this);
->>>>>>> Stashed changes
 }
 
 Sound0maticProcessor::~Sound0maticProcessor()
@@ -78,6 +74,16 @@ void Sound0maticProcessor::releaseResources()
 {
 }
 
+void Sound0maticProcessor::parameterChanged(const juce::String &paramID, float newValue)
+{
+     if (id == "sinGain")
+          stnModule.setSinusoidGain(newValue);
+     else if (id == "transGain")
+          stnModule.setTransientGain(newValue);
+     else if (id == "resGain")
+          stnModule.setResidualGain(newValue);
+}
+
 bool Sound0maticProcessor::isBusesLayoutSupported(const BusesLayout &layouts) const
 {
      return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
@@ -86,14 +92,12 @@ bool Sound0maticProcessor::isBusesLayoutSupported(const BusesLayout &layouts) co
 void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                         juce::MidiBuffer &midiMessages)
 {
-<<<<<<< Updated upstream
-=======
 
->>>>>>> Stashed changes
      float pitch = *parameters.getRawParameterValue("pitchShift");
      float stretch = *parameters.getRawParameterValue("timeStretch");
      bool bypassSpectral = parameters.getRawParameterValue("bypassSpectral")->load();
      bool bypassPhase = parameters.getRawParameterValue("bypassPhase")->load();
+
      // Apply parameters
      vocoder.setPitchShiftRatio(pitch);
      for (const auto metadata : midiMessages)
@@ -104,7 +108,6 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                handleMidiPitch(msg.getNoteNumber());
           }
      }
-
      vocoder.setTimeStretchRatio(stretch);
      spectralFX.setBypass(bypassSpectral);
      phaseFX.setBypass(bypassPhase);
@@ -122,6 +125,7 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
           if (fftProcessor.readyToProcess())
           {
                fftProcessor.performSTFT();
+
                // --- STN Analysis (Mask-based Routing Logic) ---
                juce::AudioBuffer<float> magnitude;
                magnitude.setSize(fftProcessor.real.getNumChannels(),
@@ -137,13 +141,26 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                                 imagData[j] * imagData[j]);
                }
 
+               // Update STN gain settings
+               float sinGain = *parameters.getRawParameterValue("sinGain");
+               float transGain = *parameters.getRawParameterValue("transGain");
+               float resGain = *parameters.getRawParameterValue("resGain");
+               stnModule.setSinusoidGain(sinGain);
+               stnModule.setTransientGain(transGain);
+               stnModule.setResidualGain(resGain);
+
+               // --- STN Analysis (Mask-based Routing Logic) ---
                stnModule.analyze(magnitude);
                auto &sMask = stnModule.getSinusoidMask();
                auto &tMask = stnModule.getTransientMask();
                auto &rMask = stnModule.getResidualMask();
+
                // (Optional) apply masks to fftProcessor.real/imag
-               // TODO: routing / selective FX
+               stnModule.recombineMaskedBuffers(fftProcessor.real, fftProcessor.imag);
+
+               // --- Vocoder ---
                vocoder.process(fftProcessor.real, fftProcessor.imag);
+
                // --- FX Chain ---
                spectralFX.processBins(fftProcessor.real, fftProcessor.imag);
                phaseFX.process(fftProcessor.real, fftProcessor.imag);
@@ -168,16 +185,31 @@ juce::AudioProcessorValueTreeState::ParameterLayout
 Sound0maticProcessor::createParameterLayout()
 {
      std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+     // STN Gain Parameters
+     params.push_back(std::make_unique<juce::AudioParameterFloat>(
+         "sinGain", "Sinusoidal Gain", juce::NormalisableRange<float>(0.0f, 1.0f),
+         1.0f));
+     params.push_back(std::make_unique<juce::AudioParameterFloat>(
+         "transGain", "Transient Gain", juce::NormalisableRange<float>(0.0f, 1.0f),
+         1.0f));
+     params.push_back(std::make_unique<juce::AudioParameterFloat>(
+         "resGain", "Residual Gain", juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f));
+
+     // vocoder parameters
      params.push_back(std::make_unique<juce::AudioParameterFloat>(
          "pitchShift", "Pitch Shift", juce::NormalisableRange<float>(0.5f, 2.0f),
          1.0f));
      params.push_back(std::make_unique<juce::AudioParameterFloat>(
          "timeStretch", "Time Stretch", juce::NormalisableRange<float>(0.5f, 2.0f),
          1.0f));
+
+     // FX Chain Parameters
      params.push_back(std::make_unique<juce::AudioParameterBool>(
          "bypassSpectral", "Bypass SpectralFX", false));
      params.push_back(std::make_unique<juce::AudioParameterBool>(
          "bypassPhase", "Bypass PhaseFX", false));
+
      return {params.begin(), params.end()};
 }
 

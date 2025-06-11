@@ -80,7 +80,7 @@ void Sound0maticProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
      // ...Debugging
      DBG("fftProcessor ready");
-     fftProcessor.prepare(1024, 512);
+     fftProcessor.prepare(1024, 512); // Placeholder value for blockSize and hopSize
 
      vocoder.prepare(sampleRate, 1024, 512);
      phaseFX.prepare(sampleRate, samplesPerBlock);

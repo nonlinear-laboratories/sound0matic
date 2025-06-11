@@ -8,7 +8,7 @@ void Morphology::convertToBuffer(const CImg<float> &img,
      const int width = img.width();
      const int height = img.height();
 
-     buffer.setSize(height, width);
+     buffer.setSize(width, height); // ->  Samples = width, Channels = height
 
      for (int y = 0; y < height; ++y)
           for (int x = 0; x < width; ++x)

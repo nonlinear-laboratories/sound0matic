@@ -2,52 +2,62 @@
 #include "FFTProcessor.h"
 
 FFTProcessor::FFTProcessor(int size, int hop)
-    : fft((int)std::log2(size)), fftSize(size), hopSize(hop)
+    : fftSize(size), hopSize(hop), fft(static_cast<int>(std::log2(size)))
 {
-     inputBuffer.resize(fftSize, 0.0f);
-     outputBuffer.resize(fftSize, 0.0f);
-     real.setSize(1, fftSize);
-     imag.setSize(1, fftSize);
-
-     window = std::make_unique<juce::dsp::WindowingFunction<float>>(
-         fftSize, juce::dsp::WindowingFunction<float>::hamming);
+     prepare(fftSize, hopSize);
 }
 
 void FFTProcessor::prepare(int size, int hop)
 {
      fftSize = size;
      hopSize = hop;
-     inputIndex = 0;
-     outputIndex = 0;
+     fft = juce::dsp::FFT(static_cast<int>(std::log2(size)));
+     window = std::make_unique<juce::dsp::WindowingFunction<float>>(
+         fftSize, juce::dsp::WindowingFunction<float>::hamming);
 
      inputBuffer.assign(fftSize, 0.0f);
      outputBuffer.assign(fftSize, 0.0f);
      real.setSize(1, fftSize);
      imag.setSize(1, fftSize);
 
-     window = std::make_unique<juce::dsp::WindowingFunction<float>>(
-         fftSize, juce::dsp::WindowingFunction<float>::hamming);
+     inputIndex = 0; // ensure indices are reset
+     outputIndex = 0;
+
+     jassert(real.getNumChannels() == 1 && real.getNumSamples() == fftSize);
+     jassert(imag.getNumChannels() == 1 && imag.getNumSamples() == fftSize);
+     jassert(window != nullptr);
+
+     DBG("FFTProcessor::prepare - real: " << real.getNumChannels() << " x "
+                                          << real.getNumSamples());
 }
 
 void FFTProcessor::pushSample(float sample)
 {
-     if (inputIndex < fftSize)
-          inputBuffer[inputIndex++] = sample;
+     if (inputIndex >= fftSize)
+          inputIndex = 0; // bounds safety
+     inputBuffer[inputIndex++] = sample;
 }
 
 bool FFTProcessor::readyToProcess() const
 {
-     return inputIndex >= fftSize;
+     return inputIndex == 0;
 }
 
 void FFTProcessor::performSTFT()
 {
+     DBG("FFTProcessor::performSTFT");
+
+     jassert(real.getNumChannels() == 1 && real.getNumSamples() == fftSize);
+     jassert(imag.getNumChannels() == 1 && imag.getNumSamples() == fftSize);
+     jassert(window != nullptr);
+
      juce::FloatVectorOperations::copy(real.getWritePointer(0), inputBuffer.data(),
                                        fftSize);
      juce::FloatVectorOperations::clear(imag.getWritePointer(0), fftSize);
      window->multiplyWithWindowingTable(real.getWritePointer(0), fftSize);
+
      fft.performRealOnlyForwardTransform(real.getWritePointer(0));
-     // real + imag are packed interleaved
+
      for (int i = 0; i < fftSize / 2; ++i)
      {
           float r = real.getSample(0, i * 2);
@@ -55,10 +65,18 @@ void FFTProcessor::performSTFT()
           real.setSample(0, i, r);
           imag.setSample(0, i, im);
      }
+
+     DBG("FFTProcessor::performSTFT complete");
 }
 
 void FFTProcessor::performISTFT()
 {
+     DBG("FFTProcessor::performISTFT");
+
+     jassert(real.getNumChannels() == 1 && real.getNumSamples() == fftSize);
+     jassert(imag.getNumChannels() == 1 && imag.getNumSamples() == fftSize);
+     jassert(window != nullptr);
+
      for (int i = 0; i < fftSize / 2; ++i)
      {
           real.setSample(0, i * 2, real.getSample(0, i));
@@ -73,11 +91,13 @@ void FFTProcessor::performISTFT()
 
      outputIndex = 0;
      inputIndex = 0;
+
+     DBG("FFTProcessor::performISTFT complete");
 }
 
 float FFTProcessor::popSample()
 {
-     if (outputIndex < outputBuffer.size())
-          return outputBuffer[outputIndex++];
-     return 0.0f;
+     if (outputIndex >= fftSize)
+          return 0.0f;
+     return outputBuffer[outputIndex++];
 }

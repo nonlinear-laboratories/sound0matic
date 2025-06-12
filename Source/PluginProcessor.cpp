@@ -136,7 +136,6 @@ void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
           float sample = 0.0f;
           if (playbackPosition < availableSamples)
                sample = source.getReadPointer(0)[playbackPosition++];
-
           // ...Debugging
           DBG("Before fftProcessor.pushSample()");
           fftProcessor.pushSample(sample);

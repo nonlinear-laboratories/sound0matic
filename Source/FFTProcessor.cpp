@@ -1,4 +1,5 @@
 // FFTProcessor.cpp
+
 #include "FFTProcessor.h"
 
 FFTProcessor::FFTProcessor(int size, int hop)

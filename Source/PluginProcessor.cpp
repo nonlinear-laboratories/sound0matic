@@ -2,7 +2,6 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-
 #define JUCE_DEBUG 1
 
 Sound0maticProcessor::Sound0maticProcessor()

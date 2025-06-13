@@ -8,7 +8,7 @@ Sound0maticEditor::Sound0maticEditor(Sound0maticProcessor &p)
      setSize(400, 300);
 
      titleLabel.setText("Sound0matic", juce::dontSendNotification);
-     titleLabel.setFont(juce::Font(20.0f, juce::Font::bold));
+     titleLabel.setFont(juce::Font().withHeight(20.0f).boldened());
      titleLabel.setJustificationType(juce::Justification::centred);
      addAndMakeVisible(titleLabel);
 }

@@ -31,13 +31,6 @@ const juce::String Sound0maticProcessor::getName() const
      return "sound0matic";
 }
 
-void Sound0maticProcessor::handleMidiPitch(int midiNote)
-{
-     currentMidiNote = midiNote;
-     float semitoneRatio = std::pow(2.0f, (midiNote - 60) / 12.0f);
-     vocoder.setPitchShiftRatio(semitoneRatio);
-}
-
 double Sound0maticProcessor::getTailLengthSeconds() const
 {
      return 0.0;
@@ -58,34 +51,33 @@ const juce::String Sound0maticProcessor::getProgramName(int)
 {
      return {};
 }
+
+void Sound0maticProcessor::parameterChanged(const juce::String &id, float newValue)
+{
+     DBG("Parameter changed: " << id << " = " << newValue);
+     // update vocoder or STN module here if needed
+}
+
 void Sound0maticProcessor::changeProgramName(int, const juce::String &)
 {
 }
+
 void Sound0maticProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+     DBG("prepareToPlay called");
 
-     // ...Debugging
-     DBG("prepareToPlay: entered");
+     // Load sample and initialize synthesizer
+     sampleLoader.loadSampleFromFile(
+         juce::File("/home/null/dev/sound0matic/Resource/cymbalom-a3.wav"), sampleRate);
+     sampleLoader.setupSampler(synth, sampleRate);
 
-     juce::File sampleFile("/home/null/dev/sound0matic/Resource/cymbalom-a3.wav");
-     // ...Debugging
-     DBG("sampleLoader loading file");
+     // Other module prep if needed
+     // fftProcessor.prepare(...);
+     // vocoder.prepare(...);
+     // spectralFX.prepare(...);
+     // etc.
 
-     sampleLoader.loadSampleFromFile(sampleFile, sampleRate);
-     //...Debugging
-     DBG("sampleLoader file loaded");
-     sampleLoader.setTrimRange(0.0f, 1.0f);
-     playbackPosition = 0;
-
-     // ...Debugging
-     DBG("fftProcessor ready");
-     fftProcessor.prepare(1024, 512); // Placeholder value for blockSize and hopSize
-
-     vocoder.prepare(sampleRate, 1024, 512);
-     phaseFX.prepare(sampleRate, samplesPerBlock);
-     postFX.prepare(sampleRate, samplesPerBlock);
-     //...Debugging
-     DBG("prepareToPlay: entered");
+     synth.setCurrentPlaybackSampleRate(sampleRate);
 }
 
 void Sound0maticProcessor::releaseResources()
@@ -100,106 +92,24 @@ bool Sound0maticProcessor::isBusesLayoutSupported(const BusesLayout &layouts) co
 void Sound0maticProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                         juce::MidiBuffer &midiMessages)
 {
-
-     // ...Debugging
-     DBG("processBlock: start");
-     DBG("processBlock size: " << buffer.getNumSamples());
-     DBG("playbackPosition: " << playbackPosition);
-
-     // Get parameters
-     float pitch = *parameters.getRawParameterValue("pitchShift");
-     float stretch = *parameters.getRawParameterValue("timeStretch");
-     bool bypassSpectral = parameters.getRawParameterValue("bypassSpectral")->load();
-     bool bypassPhase = parameters.getRawParameterValue("bypassPhase")->load();
-
-     // Apply parameters
-     vocoder.setPitchShiftRatio(pitch);
      for (const auto metadata : midiMessages)
      {
-          const auto msg = metadata.getMessage();
-          if (msg.isNoteOn())
-          {
-               handleMidiPitch(msg.getNoteNumber());
-          }
-     }
-     vocoder.setTimeStretchRatio(stretch);
-     spectralFX.setBypass(bypassSpectral);
-     phaseFX.setBypass(bypassPhase);
-     buffer.clear();
-     workingBuffer.setSize(buffer.getNumChannels(), buffer.getNumSamples());
-     workingBuffer.clear();
-     const auto &source = sampleLoader.getBuffer();
-     int availableSamples = sampleLoader.getNumSamples();
-     for (int i = 0; i < buffer.getNumSamples(); ++i)
-     {
-          float sample = 0.0f;
-          if (playbackPosition < availableSamples)
-               sample = source.getReadPointer(0)[playbackPosition++];
-          // ...Debugging
-          DBG("Before fftProcessor.pushSample()");
-          fftProcessor.pushSample(sample);
-          DBG("After fftProcessor.pushSample()");
-
-          if (fftProcessor.readyToProcess())
-          {
-               DBG("Ready to process FFT");
-               fftProcessor.performSTFT();
-               DBG("Performed STFT"); //...Debugging
-
-               // --- STN Analysis (Mask-based Routing Logic) ---
-               juce::AudioBuffer<float> magnitude;
-
-               // ...Debugging
-               DBG("STN analysis...");
-               magnitude.setSize(fftProcessor.real.getNumChannels(),
-                                 fftProcessor.real.getNumSamples());
-               for (int ch = 0; ch < magnitude.getNumChannels(); ++ch)
-               {
-                    const float *realData = fftProcessor.real.getReadPointer(ch);
-                    const float *imagData = fftProcessor.imag.getReadPointer(ch);
-                    float *magData = magnitude.getWritePointer(ch);
-
-                    for (int j = 0; j < magnitude.getNumSamples(); ++j)
-                         magData[j] = std::sqrt(realData[j] * realData[j] +
-                                                imagData[j] * imagData[j]);
-               }
-
-               // Update STN gain settings
-               float sinGain = *parameters.getRawParameterValue("sinGain");
-               float transGain = *parameters.getRawParameterValue("transGain");
-               float resGain = *parameters.getRawParameterValue("resGain");
-               stnModule.setSinusoidGain(sinGain);
-               stnModule.setTransientGain(transGain);
-               stnModule.setResidualGain(resGain);
-
-               // --- STN Analysis (Mask-based Routing Logic) ---
-               DBG("Analyzing STN"); //...Debugging
-               stnModule.analyze(magnitude);
-               auto &sMask = stnModule.getSinusoidMask();
-               auto &tMask = stnModule.getTransientMask();
-               auto &rMask = stnModule.getResidualMask();
-
-               // (Optional) apply masks to fftProcessor.real/imag
-               stnModule.recombineMaskedBuffers(fftProcessor.real, fftProcessor.imag);
-
-               // --- Vocoder ---
-               DBG("Before vocoder"); //...Debugging
-               vocoder.process(fftProcessor.real, fftProcessor.imag);
-               DBG("After vocoder");
-               // --- FX Chain ---
-               spectralFX.processBins(fftProcessor.real, fftProcessor.imag);
-               phaseFX.process(fftProcessor.real, fftProcessor.imag);
-               fftProcessor.performISTFT();
-               DBG("Performed ISTFT"); //...Debugging
-          }
-
-          float outSample = fftProcessor.popSample();
-          for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-               buffer.setSample(ch, i, outSample);
+          auto msg = metadata.getMessage();
+          DBG("MIDI: " << msg.getDescription());
      }
 
-     // Final gain or output shaping
-     postFX.applyGain(buffer);
+     juce::ScopedNoDenormals noDenormals;
+     auto totalNumInputChannels = getTotalNumInputChannels();
+     auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+     // Clear unused output channels
+     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+          buffer.clear(i, 0, buffer.getNumSamples());
+
+     buffer.clear(); // Important: clear before synth fills it
+
+     // MIDI → Synth → AudioBuffer
+     synth.renderNextBlock(buffer, midiMessages, 0, buffer.getNumSamples());
 }
 
 juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter()

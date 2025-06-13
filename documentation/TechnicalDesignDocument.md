@@ -90,7 +90,7 @@ faust myEffects.dsp -o myEffects.cpp
 
 produces a C++ class implementing an audio callback.  More conveniently, `faust2api -juce myEffects.dsp` generates a JUCE-compatible DSP engine (e.g. `DspFaust.cpp`/`.h`) that can be dropped into the JUCE project.  In either case, the Faust code defines DSP computations (filters, envelopes, simple effects), while the JUCE processor instantiates these objects and calls their process functions on each audio block.  The AudioProcessorEditor handles the GUI; parameter changes (from knobs or automation) are sent to the DSP via JUCE’s parameter system or direct setter calls (Faust exposes parameter paths).
 
-Internally, the JUCE processor will hold member instances for each DSP component: FFT buffers, window function, a “sine bank” object for partial synthesis, and any Faust DSP classes.  The audio callback (`processBlock`) reads from an input circular buffer, processes through the STFT pipeline, and writes to the output buffer.  Custom C++ classes handle STN separation, transient detection, and effect algorithms.  Faust-generated classes are used for embarrassingly parallel or sample-based tasks (e.g. a one-pole filter, LFO, simple waveshaper) which Faust can express concisely.
+Internally, the JUCE processor will hold member instances for each DSP component: FFT buffers, window function, and any Faust DSP classes.  The audio callback (`processBlock`) reads from an input circular buffer, processes through the STFT pipeline, and writes to the output buffer.  Custom C++ classes handle STN separation, transient detection, and effect algorithms.  Faust-generated classes are used for embarrassingly parallel or sample-based tasks (e.g. a one-pole filter, LFO, simple waveshaper) which Faust can express concisely.
 
 ### 1.2. Threading Model, Memory, and Real-Time Safety
 
@@ -135,7 +135,7 @@ void initializeBuffers() {
 // work in progress...
 
 
-```mermaid
+```
 graph TD
     A[Input Audio Sample] --> B[STFT]
     B --> E[Vocoder]

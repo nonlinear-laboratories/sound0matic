@@ -49,26 +49,10 @@ class Sound0maticProcessor : public juce::AudioProcessor,
      SampleLoader sampleLoader;
      int playbackPosition = 0;
      juce::AudioBuffer<float> workingBuffer;
-     FFTProcessor fftProcessor{1024, 512};
-     STNModule stnModule;
-     PhaseVocoder vocoder;
-     int currentMidiNote = 60;      // default to Middle C (C4)
-     int currentMidiVelocity = 127; // default to maximum velocity
-     int currentMidiChannel = 1;    // default to channel 1
-     void handleMidiPitch(int midiNote);
-     SpectralFX spectralFX;
-     PhaseFX phaseFX;
-     PostFX postFX;
-
-     void parameterChanged(const juce::String &id, float newValue) override
-     {
-          if (id == "sinGain")
-               stnModule.setSinusoidGain(newValue);
-          else if (id == "transGain")
-               stnModule.setTransientGain(newValue);
-          else if (id == "resGain")
-               stnModule.setResidualGain(newValue);
-     }
+     juce::Synthesiser synth;
+     std::unique_ptr<juce::SamplerSound> samplerSound;
+     void parameterChanged(const juce::String &parameterID, float newValue) override;
+     void setupSynth(double sampleRate);
 
      JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sound0maticProcessor)
 };

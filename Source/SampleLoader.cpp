@@ -1,6 +1,7 @@
 // SampleLoader.cpp
 
 #include "SampleLoader.h"
+#include "BufferAudioFormatReader.h"
 
 SampleLoader::SampleLoader()
 {
@@ -23,40 +24,12 @@ bool SampleLoader::loadSampleFromFile(const juce::File &file, double targetSampl
      juce::AudioBuffer<float> tempBuffer((int)reader->numChannels, totalSamples);
      reader->read(&tempBuffer, 0, totalSamples, 0, true, true);
 
-     // Convert to mono if needed
-     if (reader->numChannels > 1)
-     {
-          buffer.setSize(1, totalSamples);
-          buffer.clear();
-          for (int ch = 0; ch < reader->numChannels; ++ch)
-               buffer.addFrom(0, 0, tempBuffer, ch, 0, totalSamples,
-                              1.0f / reader->numChannels);
-     }
-     else
-     {
-          buffer = std::move(tempBuffer);
-     }
-
-     // Resample if needed
-     if (reader->sampleRate != targetSampleRate)
-     {
-          juce::AudioFormatReader *rawReader = formatManager.createReaderFor(file);
-          juce::AudioFormatReaderSource readerSource(rawReader, true);
-
-          juce::ResamplingAudioSource resampler(&readerSource, false, 1);
-          resampler.setResamplingRatio(reader->sampleRate / targetSampleRate);
-          resampler.prepareToPlay(buffer.getNumSamples(), targetSampleRate);
-
-          juce::AudioBuffer<float> resampledBuffer(
-              1,
-              (int)(buffer.getNumSamples() * (targetSampleRate / reader->sampleRate)));
-          juce::AudioSourceChannelInfo info(&resampledBuffer, 0,
-                                            resampledBuffer.getNumSamples());
-          resampler.getNextAudioBlock(info);
-          resampler.releaseResources();
-
-          buffer = std::move(resampledBuffer);
-     }
+     // Force mono
+     buffer.setSize(1, totalSamples);
+     buffer.clear();
+     for (int ch = 0; ch < reader->numChannels; ++ch)
+          buffer.addFrom(0, 0, tempBuffer, ch, 0, totalSamples,
+                         1.0f / reader->numChannels);
 
      return true;
 }
@@ -78,4 +51,26 @@ int SampleLoader::getNumSamples() const
      int startSample = static_cast<int>(trimStart * total);
      int endSample = static_cast<int>(trimEnd * total);
      return endSample - startSample;
+}
+
+void SampleLoader::setupSampler(juce::Synthesiser &synth, double sampleRate)
+{
+     synth.clearVoices();
+     synth.clearSounds();
+
+     synth.addVoice(new juce::SamplerVoice());
+
+     if (buffer.getNumSamples() == 0)
+          return;
+
+     juce::BigInteger allNotes;
+     allNotes.setRange(0, 128, true);
+
+     auto reader = std::make_unique<BufferAudioFormatReader>(buffer, sampleRate);
+     auto *sound =
+         new juce::SamplerSound("sample", *reader, allNotes, 60, 0.0, 0.1, 10.0);
+     synth.addSound(sound);
+
+     DBG("Voices count: " << synth.getNumVoices());
+     DBG("Sounds count: " << synth.getNumSounds());
 }

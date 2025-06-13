@@ -22,6 +22,7 @@ target_link_libraries(sound0matic PRIVATE
 )
 
 target_sources(sound0matic PRIVATE
+    BufferAudioFormatReader.cpp   
     PluginProcessor.cpp
     PluginEditor.cpp
     SampleLoader.cpp
